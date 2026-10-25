@@ -26,6 +26,7 @@ interface GameRoom {
   ballProfile: string;
   weather: string;
   rule: string;
+  seed: number;
   players: Map<string, RoomPlayer>;
   createdAt: number;
 }
@@ -72,6 +73,7 @@ function serializeRoom(room: GameRoom) {
     ballProfile: room.ballProfile,
     weather: room.weather,
     rule: room.rule,
+    seed: room.seed,
     players: Array.from(room.players.values()).map((p) => ({
       id: p.id,
       name: p.name,
@@ -143,6 +145,7 @@ async function startServer() {
             ballProfile: msg.ballProfile || 'supersantos',
             weather: msg.weather || 'tramonto',
             rule: msg.rule || 'classica',
+            seed: typeof msg.seed === 'number' ? msg.seed >>> 0 : 1337,
             players: new Map(),
             createdAt: Date.now(),
           };
@@ -216,6 +219,22 @@ async function startServer() {
         if (!currentRoomCode) return;
         const room = rooms.get(currentRoomCode);
         if (!room) return;
+
+        // Host match start with shared PRNG seed
+        if (msg.type === 'match_start' && room.hostId === currentPlayerId) {
+          if (typeof msg.seed === 'number') {
+            room.seed = msg.seed >>> 0;
+          }
+          broadcastToRoom(
+            room,
+            {
+              type: 'match_start',
+              seed: room.seed,
+            },
+            currentPlayerId,
+          );
+          return;
+        }
 
         // Host authoritative world state snapshot broadcast
         if (msg.type === 'world_state' && room.hostId === currentPlayerId) {

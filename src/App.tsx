@@ -25,6 +25,7 @@ import {
 import { soundEngine } from './audio/soundEngine';
 import { HudTelemetry, StreetPitchCanvas } from './components/StreetPitchCanvas';
 import { InputManager } from './game/inputManager';
+import { generateMatchSeed } from './game/rng';
 import {
   BALL_PROFILES,
   BallProfileId,
@@ -72,6 +73,7 @@ export default function App() {
 
   const [triggerGagRequest, setTriggerGagRequest] = useState<{ gag: GagId; seq: number } | null>(null);
   const [resetMatchSeq, setResetMatchSeq] = useState<number>(0);
+  const [matchSeed, setMatchSeed] = useState<number>(() => generateMatchSeed());
 
   // Multiplayer Online / LAN State
   const [playerName, setPlayerName] = useState<string>('Marco_10');
@@ -105,6 +107,7 @@ export default function App() {
     drawCalls: 42,
     triangles: 4800,
     isSoftwareGl: false,
+    physicsStepsLastFrame: 1,
   });
 
   const inputManagerRef = useRef<InputManager | null>(null);
@@ -138,6 +141,21 @@ export default function App() {
     }
   }, [autoRenderScale, isPlaying, isPaused, telemetry.fps, telemetry.isSoftwareGl]);
 
+  const startNewMatchWithSeed = useCallback(() => {
+    if (gameMode !== 'online_lan' || isOnlineHost) {
+      const nextSeed = generateMatchSeed();
+      setMatchSeed(nextSeed);
+      if (
+        gameMode === 'online_lan' &&
+        isOnlineHost &&
+        wsRef.current &&
+        wsRef.current.readyState === WebSocket.OPEN
+      ) {
+        wsRef.current.send(JSON.stringify({ type: 'match_start', seed: nextSeed }));
+      }
+    }
+  }, [gameMode, isOnlineHost]);
+
   // Keyboard shortcuts for Pause (Esc), Dock Collapse (H), Perf Monitor (F3), and Start Match (Enter/Space)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -157,6 +175,7 @@ export default function App() {
       ) {
         e.preventDefault();
         soundEngine.playWhistle(false);
+        startNewMatchWithSeed();
         setIsPlaying(true);
         setIsPaused(false);
       } else if (isPlaying && e.code === 'Escape') {
@@ -170,7 +189,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isPlaying, showNetworkModal, showControlsModal, showReleaseModal]);
+  }, [isPlaying, showNetworkModal, showControlsModal, showReleaseModal, startNewMatchWithSeed]);
 
   const refreshNetworkInfo = useCallback(async () => {
     try {
@@ -220,8 +239,11 @@ export default function App() {
             if (room.ballProfile) setBallProfile(room.ballProfile as BallProfileId);
             if (room.weather) setWeather(room.weather as WeatherId);
             if (room.rule) setStreetRule(room.rule as StreetRuleId);
+            if (typeof room.seed === 'number') setMatchSeed(room.seed >>> 0);
             setGameMode('online_lan');
             setNetworkError(null);
+          } else if (msg.type === 'match_start' && typeof msg.seed === 'number') {
+            setMatchSeed(msg.seed >>> 0);
           } else if (msg.type === 'rooms_list') {
             setAvailableRooms(
               (msg.rooms || []).map(
@@ -263,6 +285,8 @@ export default function App() {
       setNetworkError('Server WebSocket non rilevato (avvia con npm run dev in locale per la LAN).');
       return;
     }
+    const nextSeed = generateMatchSeed();
+    setMatchSeed(nextSeed);
     wsRef.current.send(
       JSON.stringify({
         type: 'create_room',
@@ -271,6 +295,7 @@ export default function App() {
         ballProfile,
         weather,
         rule: streetRule,
+        seed: nextSeed,
       }),
     );
   };
@@ -331,6 +356,7 @@ export default function App() {
         gagsEnabled={gagsEnabled}
         triggerGagRequest={triggerGagRequest}
         resetMatchSeq={resetMatchSeq}
+        matchSeed={matchSeed}
         inputManagerRef={inputManagerRef}
         wsRef={wsRef}
         isOnlineHost={isOnlineHost}
@@ -338,7 +364,7 @@ export default function App() {
         onTelemetryUpdate={setTelemetry}
       />
 
-      {/* In-Game Performance Monitor Badge (stats-gl style: FPS, Frame ms, Draw Calls, Triangles, Render Scale) */}
+      {/* In-Game Performance Monitor Badge (stats-gl style: FPS, Frame ms, Physics Steps, Draw Calls, Triangles, Render Scale) */}
       {showPerfMonitor && (
         <div className="fixed top-3 left-3 z-20 px-3 py-1.5 bg-stone-950/92 border border-stone-700/80 rounded-lg font-mono-num text-[11px] text-stone-300 flex items-center gap-2.5 pointer-events-auto">
           <Activity className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -347,6 +373,8 @@ export default function App() {
           </span>
           <span>·</span>
           <span>{telemetry.frameTimeMs} ms</span>
+          <span>·</span>
+          <span className="text-sky-300">Phys: {telemetry.physicsStepsLastFrame} step/f</span>
           <span className="hidden sm:inline">·</span>
           <span className="hidden sm:inline">{telemetry.drawCalls} draw</span>
           <span className="hidden md:inline">·</span>
@@ -535,6 +563,7 @@ export default function App() {
               <button
                 onClick={() => {
                   soundEngine.playWhistle(false);
+                  startNewMatchWithSeed();
                   setIsPlaying(true);
                   setIsPaused(false);
                 }}
@@ -848,7 +877,10 @@ export default function App() {
 
                 <div className="flex items-center gap-2">
                   <button
-                    onClick={() => setResetMatchSeq((s) => s + 1)}
+                    onClick={() => {
+                      startNewMatchWithSeed();
+                      setResetMatchSeq((s) => s + 1);
+                    }}
                     className="px-2.5 py-1 text-xs font-semibold bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-md flex items-center gap-1 cursor-pointer whitespace-nowrap"
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
@@ -1143,6 +1175,7 @@ export default function App() {
               </button>
               <button
                 onClick={() => {
+                  startNewMatchWithSeed();
                   setResetMatchSeq((s) => s + 1);
                   setIsPaused(false);
                 }}
