@@ -115,6 +115,7 @@ export interface HudTelemetry {
   physicsStepsLastFrame: number;
   cameraFar: number;
   activeGagStateLabel: string;
+  trickPopup: { label: 'TUNNEL +1' | 'CAPPELLO +1'; team: 'blue' | 'red' } | null;
 }
 
 interface StreetPitchCanvasProps {
@@ -128,6 +129,8 @@ interface StreetPitchCanvasProps {
   weather: WeatherId;
   pitch: PitchId;
   streetRule: StreetRuleId;
+  ruleTunnelEnabled: boolean;
+  ruleCappelloEnabled: boolean;
   renderScale: number;
   gagsEnabled: boolean;
   triggerGagRequest: { gag: GagId; seq: number } | null;
@@ -164,6 +167,8 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
   weather,
   pitch,
   streetRule,
+  ruleTunnelEnabled,
+  ruleCappelloEnabled,
   renderScale,
   gagsEnabled,
   triggerGagRequest,
@@ -187,6 +192,8 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
     weather,
     pitch,
     streetRule,
+    ruleTunnelEnabled,
+    ruleCappelloEnabled,
     renderScale,
     gagsEnabled,
     matchSeed,
@@ -204,6 +211,8 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
       weather,
       pitch,
       streetRule,
+      ruleTunnelEnabled,
+      ruleCappelloEnabled,
       renderScale,
       gagsEnabled,
       matchSeed,
@@ -219,6 +228,8 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
     weather,
     pitch,
     streetRule,
+    ruleTunnelEnabled,
+    ruleCappelloEnabled,
     renderScale,
     gagsEnabled,
     matchSeed,
@@ -442,6 +453,10 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
       currentRadius: 0.42,
       mudBonusMass: 0, // Accumulated mud mass fraction in [0, 0.40] (+40% max)
       lastTouchTeam: 'blue' as 'blue' | 'red',
+      lastTouchPlayerId: 'b1',
+      lastTouchStep: -999,
+      lastTouchX: 0,
+      lastTouchZ: 0,
       bouncedOffWall: false,
       hiddenByGag: false,
     };
@@ -465,6 +480,29 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
     let activeGagBannerSteps = 0;
     let lastBanner: { title: string; subtitle: string } | null = null;
     let lastBannerTimer = 0;
+    let trickPopup: { label: 'TUNNEL +1' | 'CAPPELLO +1'; team: 'blue' | 'red' } | null = null;
+    let trickPopupSteps = 0;
+
+    // Cooldown in simSteps per ogni coppia (attaccante, difensore) per Tunnel e Cappello (3s = 180 step)
+    const trickPairCooldown = new Map<string, number>();
+
+    // Stato temporaneo per il passaggio tra le gambe (Tunnel) e sopra la testa (Cappello)
+    let pendingTunnel: {
+      attackerId: string;
+      attackerTeam: 'blue' | 'red';
+      defenderId: string;
+      exitSign: number;
+      crossStep: number;
+    } | null = null;
+
+    let pendingCappello: {
+      attackerId: string;
+      attackerTeam: 'blue' | 'red';
+      defenderId: string;
+      passedStep: number;
+      expiresAtStep: number;
+    } | null = null;
+
     const glassShards: GlassShard[] = [];
 
     // Remote client input & authoritative host snapshot in Online/LAN mode
@@ -479,6 +517,14 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         leg.rotation.x = 0;
       });
       dog.tail.rotation.z = 0;
+    };
+
+    const resetSeagullRigPose = () => {
+      const gull = envRefs.seagullRig;
+      gull.root.position.set(gull.homeX, gull.homeY, gull.homeZ);
+      gull.root.rotation.set(0, 0, 0);
+      gull.leftWing.rotation.z = 0;
+      gull.rightWing.rotation.z = 0;
     };
 
     const resetPositions = (kickoffTeam: 'blue' | 'red' = 'blue') => {
@@ -500,7 +546,10 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
       ball.mudBonusMass = 0;
       ball.bouncedOffWall = false;
       ball.hiddenByGag = false;
+      pendingTunnel = null;
+      pendingCappello = null;
       resetDogRigPose();
+      resetSeagullRigPose();
 
       players.forEach((p) => {
         const initYaw = p.team === 'blue' ? Math.PI / 2 : -Math.PI / 2;
@@ -819,6 +868,113 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
           lastBannerTimer = 3.0;
         },
       },
+      gabbiano_palla: {
+        onTriggered: (item: GagStateItem, step: number) => {
+          showGagBanner('gabbiano_palla', step);
+          item.payload.targetX = typeof item.payload.targetX === 'number' ? item.payload.targetX : ball.x;
+          item.payload.targetY = typeof item.payload.targetY === 'number' ? item.payload.targetY : Math.max(0.5, ball.y);
+          item.payload.targetZ = typeof item.payload.targetZ === 'number' ? item.payload.targetZ : ball.z;
+          item.payload.grabbed = false;
+          ball.vx = 0;
+          ball.vy = 0;
+          ball.vz = 0;
+        },
+        onBeatStep: (item: GagStateItem, step: number, progress: number) => {
+          const gull = envRefs.seagullRig;
+          gull.root.visible = true;
+          const tx = item.payload.targetX ?? 0;
+          const ty = item.payload.targetY ?? 0.6;
+          const tz = item.payload.targetZ ?? -6.0;
+          const simTime = step * FIXED_DT;
+
+          let gx = gull.homeX;
+          let gy = gull.homeY;
+          let gz = gull.homeZ;
+          let dirX = 0;
+          let dirZ = 1;
+
+          if (progress < 0.5) {
+            const t = progress * 2;
+            gx = THREE.MathUtils.lerp(gull.homeX, tx, t);
+            gy = THREE.MathUtils.lerp(gull.homeY, ty + 0.4, t);
+            gz = THREE.MathUtils.lerp(gull.homeZ, tz, t);
+            dirX = tx - gull.homeX;
+            dirZ = tz - gull.homeZ;
+          } else {
+            if (!item.payload.grabbed) {
+              item.payload.grabbed = true;
+              soundEngine.playDogGrab();
+            }
+            const t = (progress - 0.5) * 2;
+            gx = THREE.MathUtils.lerp(tx, 0, t);
+            gy = THREE.MathUtils.lerp(ty + 0.4, 4.6, t);
+            gz = THREE.MathUtils.lerp(tz, -16.5, t);
+            dirX = 0 - tx;
+            dirZ = -16.5 - tz;
+          }
+
+          const yaw = Math.hypot(dirX, dirZ) > 0.01 ? Math.atan2(dirX, dirZ) : 0;
+          gull.root.position.set(gx, gy, gz);
+          gull.root.rotation.y = yaw;
+
+          const wingFlap = Math.sin(simTime * 34) * 0.58;
+          gull.leftWing.rotation.z = wingFlap;
+          gull.rightWing.rotation.z = -wingFlap;
+
+          if (item.payload.grabbed) {
+            ball.x = gx;
+            ball.y = gy - 0.38;
+            ball.z = gz;
+            ball.vx = 0;
+            ball.vy = 0;
+            ball.vz = 0;
+          }
+        },
+        onResolveEnter: () => {
+          resetSeagullRigPose();
+          ball.hiddenByGag = true;
+          ball.x = 0;
+          ball.y = -5;
+          ball.z = -16.5;
+          ball.prevX = ball.x;
+          ball.prevY = ball.y;
+          ball.prevZ = ball.z;
+          ball.vx = 0;
+          ball.vy = 0;
+          ball.vz = 0;
+        },
+        onResolveStep: () => {
+          ball.hiddenByGag = true;
+          ball.vx = 0;
+          ball.vy = 0;
+          ball.vz = 0;
+        },
+        onCooldownEnter: () => {
+          resetSeagullRigPose();
+          ball.hiddenByGag = false;
+          ball.x = 0;
+          ball.y = 0.5;
+          ball.z = 0;
+          ball.prevX = 0;
+          ball.prevY = 0.5;
+          ball.prevZ = 0;
+          ball.vx = 0;
+          ball.vy = 0;
+          ball.vz = 0;
+          ball.rotX = 0;
+          ball.rotZ = 0;
+          ball.prevRotX = 0;
+          ball.prevRotZ = 0;
+          ball.spinY = 0;
+          ball.mudBonusMass = 0;
+          ball.bouncedOffWall = false;
+          lastBanner = {
+            title: 'UN’ONDA RIPORTA LA PALLA A RIVA!',
+            subtitle: 'Il mare ha restituito il pallone al centro della spiaggia!',
+          };
+          lastBannerTimer = 3.0;
+        },
+      },
     };
 
     if (!isSoftwareGl) {
@@ -922,7 +1078,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
       simSteps += 1;
       const simTime = simSteps * fixedDt;
 
-      // Countdown UI toast timers in simulated steps / time
+      // Countdown UI toast & trick popup timers in simulated steps / time
       if (lastBannerTimer > 0) {
         lastBannerTimer -= fixedDt;
         if (lastBannerTimer <= 0) {
@@ -933,6 +1089,12 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         activeGagBannerSteps -= 1;
         if (activeGagBannerSteps <= 0) {
           activeGag = null;
+        }
+      }
+      if (trickPopupSteps > 0) {
+        trickPopupSteps -= 1;
+        if (trickPopupSteps <= 0) {
+          trickPopup = null;
         }
       }
 
@@ -1048,10 +1210,10 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         activeBlueIdx = bestIdx;
       }
 
-      // Update Players (Controlled + AI) using weather grip, speed & turn multipliers
+      // Update Players (Controlled + AI) using weather AND pitch grip, speed & turn multipliers
       const grip = wCfg.playerGripMultiplier / Math.sqrt(pitchCfg.groundFriction);
-      const speedMult = wCfg.playerSpeedMultiplier;
-      const turnMult = wCfg.playerTurnMultiplier;
+      const speedMult = wCfg.playerSpeedMultiplier * pitchCfg.playerSpeedMultiplier;
+      const turnMult = wCfg.playerTurnMultiplier * pitchCfg.playerTurnMultiplier;
 
       players.forEach((p, idx) => {
         const isBlueControlled = idx === activeBlueIdx;
@@ -1131,7 +1293,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
           }
         }
 
-        // Smooth velocity damping with weather grip & turn multiplier
+        // Smooth velocity damping with weather & pitch grip & turn multiplier
         const accel = 11.5 * grip * turnMult;
         p.vx = THREE.MathUtils.damp(p.vx, targetVx, accel, fixedDt);
         p.vz = THREE.MathUtils.damp(p.vz, targetVz, accel, fixedDt);
@@ -1139,18 +1301,53 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         p.x = THREE.MathUtils.clamp(p.x + p.vx * fixedDt, -15.6, 15.6);
         p.z = THREE.MathUtils.clamp(p.z + p.vz * fixedDt, -9.6, 9.6);
 
-        // Ball Dribbling, Kicking, Passing & "Cappello / Tunnel" Detection
+        // Ball Dribbling, Kicking, Passing & Cappello Recovery Check
         const isBallLockedByGag =
           ball.hiddenByGag ||
           gagState.activeGagId === 'palla_tetto' ||
           gagState.activeGagId === 'tombino_fogna' ||
-          gagState.activeGagId === 'cane_palla';
+          gagState.activeGagId === 'cane_palla' ||
+          gagState.activeGagId === 'gabbiano_palla';
         const dBall = Math.hypot(ball.x - p.x, ball.z - p.z);
         if (dBall < 1.25 && ball.y < 1.75 && !isBallLockedByGag) {
+          // Cappello (+1) recovery check: if a lobbed ball passed over an opponent's head (1.8m-4.0m within 1.2m),
+          // award +1 point ONLY if the attacker or a teammate recovers the ball within 2.5s simulated before an opponent touches it!
+          if (pendingCappello) {
+            if (p.team !== pendingCappello.attackerTeam) {
+              // Opponent touched the ball first: cappello cancelled
+              pendingCappello = null;
+            } else if (
+              st.ruleCappelloEnabled &&
+              simSteps <= pendingCappello.expiresAtStep &&
+              simSteps > pendingCappello.passedStep + 4
+            ) {
+              const pairKey = `cappello_${pendingCappello.attackerId}_${pendingCappello.defenderId}`;
+              if (simSteps >= (trickPairCooldown.get(pairKey) ?? 0)) {
+                trickPairCooldown.set(pairKey, simSteps + 180); // 3s simulated cooldown per pair
+                if (p.team === 'blue') {
+                  scoreBlue += 1;
+                  stylePointsBlue += 1;
+                } else {
+                  scoreRed += 1;
+                  stylePointsRed += 1;
+                }
+                trickPopup = { label: 'CAPPELLO +1', team: p.team };
+                trickPopupSteps = 48; // ~800ms simulated HUD popup
+                soundEngine.playTrickCheer();
+                // TODO (Fase F): Inviare evento punteggio CAPPELLO +1 ai client via WebSocket
+              }
+              pendingCappello = null;
+            }
+          }
+
           const prof = BALL_PROFILES[st.ballProfile];
           const effectiveMass = prof.mass * (1 + ball.mudBonusMass);
           const massFactor = 0.43 / effectiveMass;
           ball.lastTouchTeam = p.team;
+          ball.lastTouchPlayerId = p.id;
+          ball.lastTouchStep = simSteps;
+          ball.lastTouchX = p.x;
+          ball.lastTouchZ = p.z;
 
           const kickDirX = Math.sin(p.yaw);
           const kickDirZ = Math.cos(p.yaw);
@@ -1187,20 +1384,6 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
               ball.vy = 9.4;
               p.kickAnimTimer = 0.3;
               soundEngine.playKick(st.ballProfile, 0.65);
-
-              const oppNear = players.some(
-                (op) =>
-                  op.team !== p.team &&
-                  Math.hypot(op.x - (p.x + kickDirX * 2.2), op.z - (p.z + kickDirZ * 2.2)) < 2.2,
-              );
-              if (oppNear) {
-                stylePointsBlue += 1;
-                lastBanner = {
-                  title: 'CAPPELLO DI CLASSE! (+1 STILE)',
-                  subtitle: 'Pallonetto morbido sopra la testa dell’avversario!',
-                };
-                lastBannerTimer = 2.6;
-              }
             } else {
               const dribbleDist = 0.78;
               ball.x = THREE.MathUtils.damp(ball.x, p.x + kickDirX * dribbleDist, 14, fixedDt);
@@ -1259,7 +1442,8 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         ball.hiddenByGag ||
         gagState.activeGagId === 'palla_tetto' ||
         gagState.activeGagId === 'tombino_fogna' ||
-        gagState.activeGagId === 'cane_palla';
+        gagState.activeGagId === 'cane_palla' ||
+        gagState.activeGagId === 'gabbiano_palla';
 
       if (!ballCapturedByGag) {
         // Deflation logic for 'bucato' in simulated time
@@ -1273,8 +1457,13 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         const speedXZ = Math.hypot(ball.vx, ball.vz);
         const totalSpeed = Math.hypot(ball.vx, ball.vy, ball.vz);
 
-        // Mud accumulation in simulated time while rolling or bouncing on the ground
-        if (wCfg.mudAccumulationRate > 0 && ball.y <= ball.currentRadius + 0.04 && (speedXZ > 0.15 || Math.abs(ball.vy) > 0.3)) {
+        // Mud accumulation in simulated time while rolling or bouncing on the ground (disabled on Spiaggia)
+        if (
+          pitchCfg.allowsMudAccumulation &&
+          wCfg.mudAccumulationRate > 0 &&
+          ball.y <= ball.currentRadius + 0.04 &&
+          (speedXZ > 0.15 || Math.abs(ball.vy) > 0.3)
+        ) {
           ball.mudBonusMass = Math.min(
             wCfg.mudMaxMassBonus,
             ball.mudBonusMass + wCfg.mudAccumulationRate * fixedDt,
@@ -1309,7 +1498,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
           ball.vz += perpZ * wobbleOsc * bProf.wobble.force * mudInvMass * fixedDt;
         }
 
-        // 5. Air & Ground Rolling Drag (with weather rollFrictionMultiplier & mud drag)
+        // 5. Air & Ground Rolling Drag (with weather rollFrictionMultiplier, pitch groundFriction & mud drag)
         const drag = Math.pow(1 - bProf.linearDrag, fixedDt * 60);
         ball.vx *= drag;
         ball.vz *= drag;
@@ -1334,22 +1523,140 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         ball.rotX += ball.vz * fixedDt * 2.1;
         ball.rotZ -= ball.vx * fixedDt * 2.1;
 
-        // Ground Bounce (with muffled mud audio & deterministic irregular deflection when punctured)
+        // 6. Geometric Detection of Street Rules: TUNNEL (+1) and CAPPELLO (+1) (Host / Local only)
+        if (simSteps - ball.lastTouchStep <= 135) {
+          const attacker = players.find((pl) => pl.id === ball.lastTouchPlayerId);
+
+          // A) TUNNEL (+1): Low ball (center height <= ~0.4m / ground radius) passing through the segment
+          // between an opponent's two feet in close range (~1.5m) after an attacker touch, then exiting the other side.
+          if (st.ruleTunnelEnabled && Math.min(ball.prevY, ball.y) <= Math.max(0.45, ball.currentRadius + 0.05)) {
+            for (const def of players) {
+              if (def.team === ball.lastTouchTeam) continue;
+              const pairKey = `tunnel_${ball.lastTouchPlayerId}_${def.id}`;
+              if (simSteps < (trickPairCooldown.get(pairKey) ?? 0)) continue;
+
+              // Attacker must have played the ball from close range (<= 1.5m..2.8m)
+              const distTouchToDef = Math.hypot(ball.lastTouchX - def.x, ball.lastTouchZ - def.z);
+              const distAttToDef = attacker ? Math.hypot(attacker.x - def.x, attacker.z - def.z) : distTouchToDef;
+              if (Math.min(distTouchToDef, distAttToDef) > 2.6) continue;
+
+              // Local coordinate system of the defender's two feet:
+              // fwd = direction defender faces; right = segment axis connecting left foot to right foot
+              const fwdX = Math.sin(def.yaw);
+              const fwdZ = Math.cos(def.yaw);
+              const rightX = Math.cos(def.yaw);
+              const rightZ = -Math.sin(def.yaw);
+
+              const dx0 = ball.prevX - def.x;
+              const dz0 = ball.prevZ - def.z;
+              const s0 = dx0 * fwdX + dz0 * fwdZ;
+              const u0 = dx0 * rightX + dz0 * rightZ;
+
+              const dx1 = ball.x - def.x;
+              const dz1 = ball.z - def.z;
+              const s1 = dx1 * fwdX + dz1 * fwdZ;
+              const u1 = dx1 * rightX + dz1 * rightZ;
+
+              // Geometric segment intersection test between ball movement (prev -> curr) and the inter-foot line (s = 0)
+              if ((s0 <= 0 && s1 > 0) || (s0 >= 0 && s1 < 0)) {
+                const denom = s0 - s1;
+                const tCross = Math.abs(denom) > 1e-6 ? s0 / denom : 0.5;
+                const uCross = u0 + tCross * (u1 - u0);
+                // Segment between the two feet has half-width ~0.46m
+                if (Math.abs(uCross) <= 0.46) {
+                  pendingTunnel = {
+                    attackerId: ball.lastTouchPlayerId,
+                    attackerTeam: ball.lastTouchTeam,
+                    defenderId: def.id,
+                    exitSign: s1 >= s0 ? 1 : -1,
+                    crossStep: simSteps,
+                  };
+                }
+              }
+
+              // Confirm Tunnel (+1) as soon as the ball exits the other side within close radius (~1.5m)
+              if (
+                pendingTunnel &&
+                pendingTunnel.defenderId === def.id &&
+                simSteps - pendingTunnel.crossStep <= 24 &&
+                s1 * pendingTunnel.exitSign >= 0.16 &&
+                Math.hypot(dx1, dz1) <= 1.5
+              ) {
+                trickPairCooldown.set(pairKey, simSteps + 180); // 3s simulated cooldown per pair
+                if (pendingTunnel.attackerTeam === 'blue') {
+                  scoreBlue += 1;
+                  stylePointsBlue += 1;
+                } else {
+                  scoreRed += 1;
+                  stylePointsRed += 1;
+                }
+                trickPopup = { label: 'TUNNEL +1', team: pendingTunnel.attackerTeam };
+                trickPopupSteps = 48; // ~800ms simulated HUD popup
+                soundEngine.playTrickCheer();
+                // TODO (Fase F): Inviare evento punteggio TUNNEL +1 ai client via WebSocket
+                pendingTunnel = null;
+              }
+            }
+          }
+
+          // B) CAPPELLO (+1): Ball passes over an opponent's head (height 1.8m..4.0m) within 1.2m horizontally;
+          // point is awarded when recovered by the attacker or a teammate within 2.5s simulated (150 steps).
+          if (st.ruleCappelloEnabled) {
+            const segDx = ball.x - ball.prevX;
+            const segDz = ball.z - ball.prevZ;
+            const segLenSq = segDx * segDx + segDz * segDz;
+            for (const def of players) {
+              if (def.team === ball.lastTouchTeam) continue;
+              const pairKey = `cappello_${ball.lastTouchPlayerId}_${def.id}`;
+              if (simSteps < (trickPairCooldown.get(pairKey) ?? 0)) continue;
+
+              const tProj =
+                segLenSq > 1e-6
+                  ? THREE.MathUtils.clamp(
+                      ((def.x - ball.prevX) * segDx + (def.z - ball.prevZ) * segDz) / segLenSq,
+                      0,
+                      1,
+                    )
+                  : 1;
+              const closestX = ball.prevX + tProj * segDx;
+              const closestZ = ball.prevZ + tProj * segDz;
+              const closestY = ball.prevY + tProj * (ball.y - ball.prevY);
+              const horizDist = Math.hypot(closestX - def.x, closestZ - def.z);
+
+              if (horizDist <= 1.2 && closestY >= 1.8 && closestY <= 4.0) {
+                pendingCappello = {
+                  attackerId: ball.lastTouchPlayerId,
+                  attackerTeam: ball.lastTouchTeam,
+                  defenderId: def.id,
+                  passedStep: simSteps,
+                  expiresAtStep: simSteps + 150, // 2.5s simulated recovery window
+                };
+              }
+            }
+          }
+        }
+
+        // Ground Bounce (with muffled mud/sand audio & pitch restitution multiplier)
         if (ball.y < ball.currentRadius) {
           const impactSpeed = Math.abs(ball.vy);
           ball.y = ball.currentRadius;
           if (impactSpeed > 1.4) {
-            if (wCfg.mudAccumulationRate > 0) {
+            if (pitchCfg.allowsMudAccumulation && wCfg.mudAccumulationRate > 0) {
               ball.mudBonusMass = Math.min(
                 wCfg.mudMaxMassBonus,
                 ball.mudBonusMass + wCfg.mudAccumulationRate * 3 * fixedDt,
               );
             }
-            soundEngine.playBounce(st.ballProfile, impactSpeed, st.weather === 'fango');
+            soundEngine.playBounce(
+              st.ballProfile,
+              impactSpeed,
+              st.weather === 'fango' || pitchCfg.muffledBounceAudio,
+            );
             ball.vy =
               impactSpeed *
               bProf.restitution *
               wCfg.ballRestitutionMultiplier *
+              pitchCfg.ballRestitutionMultiplier *
               (1 / (1 + ball.mudBonusMass * 0.35));
             if (st.ballProfile === 'bucato') {
               ball.vx += rng.range(-1.1, 1.1);
@@ -1360,7 +1667,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
           }
         }
 
-        // Goalpost Collisions ("Pali / Giubbotti")
+        // Goalpost Collisions ("Pali / Giubbotti / Secchielli")
         for (const post of envRefs.goalPosts) {
           const dx = ball.x - post.x;
           const dz = ball.z - post.z;
@@ -1387,7 +1694,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
               } else {
                 lastBanner = {
                   title: 'PALO PIENO!',
-                  subtitle: `Scheggiato il giubbotto! (Pali Blu: ${paliBlue})`,
+                  subtitle: `Scheggiato il palo! (Pali Blu: ${paliBlue})`,
                 };
                 lastBannerTimer = 2.2;
               }
@@ -1420,7 +1727,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
             scoreRed += bonusSponda;
             lastBanner = {
               title: bonusSponda > 1 ? 'GOL DI SPONDA RIVALI! (+2)' : 'GOL DEI RIVALI DEL RIONE!',
-              subtitle: 'Palla tra i giubbotti!',
+              subtitle: 'Palla in rete!',
             };
             lastBannerTimer = 3.6;
           }
@@ -1430,30 +1737,43 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
           resetPositions(scoredByBlue ? 'red' : 'blue');
         }
 
-        // Courtyard Gag Volume Triggers (When Classic Gags Enabled — max 1 active, long cooldown, seeded probability)
+        // Per-Pitch Gag Volume Triggers (When Classic Gags Enabled — filtered by GAG_CONFIGS[id].allowedPitches)
         if (st.gagsEnabled && gagState.activeGagId === null) {
           // 1. Signora Maria Balcony
           if (ball.z < -9.3 && ball.x > -10.8 && ball.x < -5.2 && ball.y > 1.8) {
-            tryTriggerGag(gagState, 'vecchia_buca', simSteps, rng, gagRegistry);
+            tryTriggerGag(gagState, 'vecchia_buca', simSteps, rng, gagRegistry, {}, false, st.pitch);
           }
           // 2. Breakable Window
           else if (ball.z < -9.3 && ball.x > 5.2 && ball.x < 9.8 && ball.y > 1.8) {
-            tryTriggerGag(gagState, 'finestra_rotta', simSteps, rng, gagRegistry);
+            tryTriggerGag(gagState, 'finestra_rotta', simSteps, rng, gagRegistry, {}, false, st.pitch);
           }
           // 3. Ball on the Roof
           else if (ball.z < -8.8 && ball.y > 5.8) {
-            tryTriggerGag(gagState, 'palla_tetto', simSteps, rng, gagRegistry);
+            tryTriggerGag(gagState, 'palla_tetto', simSteps, rng, gagRegistry, {}, false, st.pitch);
           }
           // 4. Parked Car Alarm
           else if (ball.z > 9.3 && ball.x < -8.2) {
-            tryTriggerGag(gagState, 'allarme_auto', simSteps, rng, gagRegistry);
+            tryTriggerGag(gagState, 'allarme_auto', simSteps, rng, gagRegistry, {}, false, st.pitch);
           }
           // 5. Storm Drain Tombino (100% probability in GAG_CONFIGS)
           else if (Math.hypot(ball.x - 9.5, ball.z - 8.8) < 0.78 && ball.y < 0.5 && speedXZ < 5.5) {
-            tryTriggerGag(gagState, 'tombino_fogna', simSteps, rng, gagRegistry);
+            tryTriggerGag(gagState, 'tombino_fogna', simSteps, rng, gagRegistry, {}, false, st.pitch);
+          }
+          // 6. Beach Seagull Swoop ('gabbiano_palla' — valid on 'spiaggia' when ball is kicked high or near North shore)
+          else if (st.pitch === 'spiaggia' && ball.z < -6.8 && (ball.y > 1.6 || speedXZ < 2.2)) {
+            tryTriggerGag(
+              gagState,
+              'gabbiano_palla',
+              simSteps,
+              rng,
+              gagRegistry,
+              { targetX: ball.x, targetY: ball.y, targetZ: ball.z, grabbed: false },
+              false,
+              st.pitch,
+            );
           }
 
-          // 6. Courtyard Dog Steals Ball: ball slow/stopped on the ground near South sideline dog for >= 35 steps
+          // 7. Courtyard / Beach Dog Steals Ball: ball slow/stopped on the ground near South sideline dog for >= 35 steps
           const distToDog = Math.hypot(ball.x - envRefs.dogRig.homeX, ball.z - envRefs.dogRig.homeZ);
           if (ball.y < 0.55 && speedXZ < 2.4 && (distToDog < 4.2 || (ball.z > 6.8 && Math.abs(ball.x - envRefs.dogRig.homeX) < 5.2))) {
             gagState.dogNearBallSteps += 1;
@@ -1467,6 +1787,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
                 gagRegistry,
                 { targetX: ball.x, targetZ: ball.z, grabbed: false },
                 false,
+                st.pitch,
               );
             }
           } else {
@@ -1476,22 +1797,32 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
           gagState.dogNearBallSteps = 0;
         }
 
-        // Courtyard Perimeter Bounce Walls ("Sponda")
+        // Courtyard / Beach Perimeter Bounce Walls ("Sponda")
         if (Math.abs(ball.z) > 9.8) {
           ball.z = Math.sign(ball.z) * 9.8;
           ball.vz = -ball.vz * pitchCfg.wallRestitution;
           ball.bouncedOffWall = true;
-          soundEngine.playBounce(st.ballProfile, Math.abs(ball.vz), st.weather === 'fango');
+          soundEngine.playBounce(
+            st.ballProfile,
+            Math.abs(ball.vz),
+            st.weather === 'fango' || pitchCfg.muffledBounceAudio,
+          );
         }
         if (Math.abs(ball.x) > 15.8 && Math.abs(ball.z) >= 2.65) {
           ball.x = Math.sign(ball.x) * 15.8;
           ball.vx = -ball.vx * pitchCfg.wallRestitution;
           ball.bouncedOffWall = true;
-          soundEngine.playBounce(st.ballProfile, Math.abs(ball.vx), st.weather === 'fango');
+          soundEngine.playBounce(
+            st.ballProfile,
+            Math.abs(ball.vx),
+            st.weather === 'fango' || pitchCfg.muffledBounceAudio,
+          );
         }
       }
 
       // Broadcast Host state to Online/LAN room at 25Hz (includes position, velocity & rotation)
+      // TODO (Fase F): Includere nel pacchetto dell'host anche il campo scelto (st.pitch)
+      // e gli eventi di punteggio Tunnel (+1) / Cappello (+1) per sincronizzare i client.
       networkBroadcastAccumulator += fixedDt;
       if (
         st.gameMode === 'online_lan' &&
@@ -1545,13 +1876,21 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         renderer.setPixelRatio(baseRatio * st.renderScale);
       }
 
-      // Dynamic Pitch rebuild if changed
+      // Dynamic Pitch rebuild if changed + reset mud & active gag if not allowed on new pitch
       if (st.pitch !== currentBuiltPitch) {
         currentBuiltPitch = st.pitch;
         scene.remove(envRefs.group);
         envRefs = buildCourtyardEnvironment(currentBuiltPitch, maxAniso);
         scene.add(envRefs.group);
+        if (!PITCH_CONFIGS[currentBuiltPitch].allowsMudAccumulation) {
+          ball.mudBonusMass = 0;
+        }
+        gagState = createInitialGagSystemState();
+        ball.hiddenByGag = false;
       }
+
+      // Keep optional synthesized beach waves in sync with pitch & play state
+      soundEngine.setBeachWavesActive(st.isPlaying && !st.isPaused && st.pitch === 'spiaggia');
 
       // Match reset or seed initialization check
       if (shouldResetMatchRef.current) {
@@ -1571,6 +1910,9 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         activeGagBannerSteps = 0;
         lastBanner = null;
         lastBannerTimer = 0;
+        trickPopup = null;
+        trickPopupSteps = 0;
+        trickPairCooldown.clear();
         envRefs.windowGlassMesh.visible = true;
         envRefs.carHeadlights.forEach((hl) => {
           hl.visible = true;
@@ -1579,7 +1921,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         soundEngine.playWhistle(false);
       }
 
-      // Manual Gag Trigger from UI dock button (force = true: ignores probability & cooldown)
+      // Manual Gag Trigger from UI dock button (force = true: ignores probability & cooldown, checks allowedPitches)
       if (manualGagTriggerRef.current) {
         const req = manualGagTriggerRef.current;
         manualGagTriggerRef.current = null;
@@ -1589,8 +1931,11 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
           simSteps,
           rng,
           gagRegistry,
-          req.gag === 'cane_palla' ? { targetX: ball.x, targetZ: ball.z, grabbed: false } : {},
+          req.gag === 'cane_palla' || req.gag === 'gabbiano_palla'
+            ? { targetX: ball.x, targetY: ball.y, targetZ: ball.z, grabbed: false }
+            : {},
           true,
+          st.pitch,
         );
       }
 
@@ -1832,6 +2177,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
           physicsStepsLastFrame: lastPhysicsSteps,
           cameraFar: Number(camera.far.toFixed(1)),
           activeGagStateLabel,
+          trickPopup: trickPopup ? { label: trickPopup.label, team: trickPopup.team } : null,
         });
       }
 
@@ -1857,6 +2203,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
     return () => {
       window.removeEventListener('resize', onResize);
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      soundEngine.setBeachWavesActive(false);
       if (wsRef.current) {
         wsRef.current.removeEventListener('message', handleWsMessage);
       }

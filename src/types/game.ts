@@ -2,7 +2,7 @@ export type BallProfileId = 'supersantos' | 'classico' | 'bagnato' | 'bucato';
 
 export type WeatherId = 'tramonto' | 'sole' | 'pioggia' | 'vento' | 'nebbia' | 'notte' | 'fango';
 
-export type PitchId = 'cortile' | 'strada' | 'terra';
+export type PitchId = 'cortile' | 'strada' | 'terra' | 'spiaggia';
 
 export type StreetRuleId = 'classica' | 'chi_segna_vince' | 'tre_pali' | 'palla_avvelenata';
 
@@ -16,7 +16,8 @@ export type GagId =
   | 'palla_tetto'
   | 'allarme_auto'
   | 'tombino_fogna'
-  | 'cane_palla';
+  | 'cane_palla'
+  | 'gabbiano_palla';
 
 export type GagLifecycleState = 'Idle' | 'Triggered' | 'Beat' | 'Resolve' | 'Cooldown';
 
@@ -326,9 +327,14 @@ export interface PitchConfig {
   subtitle: string;
   groundColor: string;
   lineColor: string;
-  goalpostStyle: 'giubbotti' | 'pietre' | 'tubi';
+  goalpostStyle: 'giubbotti' | 'pietre' | 'tubi' | 'ciabatte';
   wallRestitution: number;
   groundFriction: number;
+  ballRestitutionMultiplier: number;
+  playerSpeedMultiplier: number;
+  playerTurnMultiplier: number;
+  allowsMudAccumulation: boolean;
+  muffledBounceAudio: boolean;
 }
 
 export const PITCH_CONFIGS: Record<PitchId, PitchConfig> = {
@@ -341,6 +347,11 @@ export const PITCH_CONFIGS: Record<PitchId, PitchConfig> = {
     goalpostStyle: 'giubbotti',
     wallRestitution: 0.82,
     groundFriction: 1.0,
+    ballRestitutionMultiplier: 1.0,
+    playerSpeedMultiplier: 1.0,
+    playerTurnMultiplier: 1.0,
+    allowsMudAccumulation: true,
+    muffledBounceAudio: false,
   },
   strada: {
     id: 'strada',
@@ -351,6 +362,11 @@ export const PITCH_CONFIGS: Record<PitchId, PitchConfig> = {
     goalpostStyle: 'pietre',
     wallRestitution: 0.88,
     groundFriction: 0.85,
+    ballRestitutionMultiplier: 1.0,
+    playerSpeedMultiplier: 1.0,
+    playerTurnMultiplier: 1.0,
+    allowsMudAccumulation: true,
+    muffledBounceAudio: false,
   },
   terra: {
     id: 'terra',
@@ -361,6 +377,26 @@ export const PITCH_CONFIGS: Record<PitchId, PitchConfig> = {
     goalpostStyle: 'tubi',
     wallRestitution: 0.65,
     groundFriction: 1.35,
+    ballRestitutionMultiplier: 1.0,
+    playerSpeedMultiplier: 1.0,
+    playerTurnMultiplier: 1.0,
+    allowsMudAccumulation: true,
+    muffledBounceAudio: false,
+  },
+  spiaggia: {
+    id: 'spiaggia',
+    name: 'Spiaggia Libera',
+    subtitle: 'Sabbia calda che frena la palla (attrito x3, rimbalzo -50%), porte con secchielli e ciabatte, mare sullo sfondo',
+    groundColor: '#e6c280',
+    lineColor: '#fef9c3',
+    goalpostStyle: 'ciabatte',
+    wallRestitution: 0.55,
+    groundFriction: 3.0,
+    ballRestitutionMultiplier: 0.5,
+    playerSpeedMultiplier: 0.9,
+    playerTurnMultiplier: 0.85,
+    allowsMudAccumulation: false,
+    muffledBounceAudio: true,
   },
 };
 
@@ -373,23 +409,23 @@ export interface StreetRuleConfig {
 export const STREET_RULES: Record<StreetRuleId, StreetRuleConfig> = {
   classica: {
     id: 'classica',
-    name: 'Regola del Cortile (Tempo + Bonus)',
-    description: 'Partita a tempo: Tunnel e Cappelli danno +1 punto stile, chi fa più gol vince.',
+    name: 'Regola del Cortile (Tempo)',
+    description: 'Partita a tempo: chi segna più punti (gol + eventuali bonus attivi) vince.',
   },
   chi_segna_vince: {
     id: 'chi_segna_vince',
     name: 'Chi Segna Vince (Ultimo Gol)',
-    description: 'Morte improvvisa: il primo che insacca tra i giubbotti chiude la sfida!',
+    description: 'Morte improvvisa: il primo che insacca tra le porte chiude la sfida!',
   },
   tre_pali: {
     id: 'tre_pali',
     name: '3 Pali = 1 Gol',
-    description: 'Colpire i giubbotti o i pali conta: ogni 3 pali scatta automaticamente 1 Gol!',
+    description: 'Colpire i giubbotti, i secchielli o i pali conta: ogni 3 pali scatta automaticamente 1 Gol!',
   },
   palla_avvelenata: {
     id: 'palla_avvelenata',
     name: 'Tiri al Volo & Sponda Doppia',
-    description: 'Gol dopo rimbalzo sul muro del cortile ("sponda") vale DOPPIO (2 Gol)!',
+    description: 'Gol dopo rimbalzo sul muro/bordo ("sponda") vale DOPPIO (2 Gol)!',
   },
 };
 
@@ -405,6 +441,7 @@ export interface GagConfig {
   label: string;
   title: string;
   subtitle: string;
+  allowedPitches: PitchId[]; // Elenco dei campi in cui la gag può scattare ed essere mostrata nel dock
   probability: number; // Seeded probability in [0, 1] when hitting target
   triggeredSteps: number; // Duration of 'Triggered' phase in fixed steps (60 steps = 1s)
   beatSteps: number; // Duration of 'Beat' phase in fixed steps
@@ -418,6 +455,7 @@ export const GAG_CONFIGS: Record<GagId, GagConfig> = {
     label: 'Vecchia Buca Palla',
     title: 'LA VECCHIA HA BUCATO IL PALLONE!',
     subtitle: 'Signora Maria: "Mo\' ve lo taglio co\' le forbici!" — Pallone bucato per 20s!',
+    allowedPitches: ['cortile', 'strada', 'terra'],
     probability: 0.75,
     triggeredSteps: 6,
     beatSteps: 1200, // 20s simulated with punctured ball
@@ -429,6 +467,7 @@ export const GAG_CONFIGS: Record<GagId, GagConfig> = {
     label: 'Rompi Finestra',
     title: 'FINESTRA DEL CONDOMINIO ROTTA!',
     subtitle: 'Vetro in frantumi! "Chi è stato?!" — Scappa prima che scenda il condomino!',
+    allowedPitches: ['cortile', 'strada', 'terra'],
     probability: 0.7,
     triggeredSteps: 6,
     beatSteps: 720, // 12s simulated before window glass is repaired
@@ -440,6 +479,7 @@ export const GAG_CONFIGS: Record<GagId, GagConfig> = {
     label: 'Palla sul Tetto',
     title: 'PALLONE FINITO SUL TETTO!',
     subtitle: 'È rimasto incastrato tra le tegole... Lanciano il pallone di plastica di riserva!',
+    allowedPitches: ['cortile', 'strada', 'terra'],
     probability: 0.8,
     triggeredSteps: 6,
     beatSteps: 156, // 2.6s simulated stuck on the roof
@@ -451,6 +491,7 @@ export const GAG_CONFIGS: Record<GagId, GagConfig> = {
     label: 'Allarme Auto',
     title: 'ALLARME DELL’AUTO PARCHEGGIATA!',
     subtitle: 'BEEP! BEEP! BEEP! Rimbalzo elettrico sul cofano!',
+    allowedPitches: ['cortile', 'strada', 'terra'],
     probability: 0.7,
     triggeredSteps: 6,
     beatSteps: 360, // 6.0s simulated flashing lights
@@ -462,6 +503,7 @@ export const GAG_CONFIGS: Record<GagId, GagConfig> = {
     label: 'Palla nel Tombino',
     title: 'PALLA NEL TOMBINO!',
     subtitle: 'PLOP! Sparita nella griglia... Entra in campo il pallone di plastica di scorta!',
+    allowedPitches: ['cortile', 'strada', 'terra'],
     probability: 1.0, // 100% probability for storm drain
     triggeredSteps: 6,
     beatSteps: 12,
@@ -473,11 +515,24 @@ export const GAG_CONFIGS: Record<GagId, GagConfig> = {
     label: 'Cane Ruba Palla',
     title: 'IL CANE HA RUBATO IL PALLONE!',
     subtitle: 'BAU! BAU! L’ha preso in bocca ed è scappato a bordo campo per qualche secondo!',
+    allowedPitches: ['cortile', 'strada', 'terra', 'spiaggia'],
     probability: 0.75,
     triggeredSteps: 6,
     beatSteps: 120, // 2.0s simulated: dog runs to ball, grabs it, runs back to sideline
     resolveSteps: 360, // 6.0s simulated (within 5-8s): ball occupied off-field, then returned to center
     cooldownSteps: 1920, // 32s simulated cooldown
+  },
+  gabbiano_palla: {
+    id: 'gabbiano_palla',
+    label: 'Gabbiano Ruba Palla',
+    title: 'IL GABBIANO HA PORTATO VIA LA PALLA!',
+    subtitle: 'KREE! È sceso in picchiata sulla spiaggia... Un’onda riporta il pallone a riva!',
+    allowedPitches: ['spiaggia'],
+    probability: 0.75,
+    triggeredSteps: 6,
+    beatSteps: 120, // 2.0s simulated: seagull swoops down, grabs ball, flies toward the sea
+    resolveSteps: 240, // 4.0s simulated off-field before wave returns the ball to center
+    cooldownSteps: 1800, // 30s simulated cooldown
   },
 };
 

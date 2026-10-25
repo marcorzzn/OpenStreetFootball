@@ -1,8 +1,9 @@
-import { GAG_CONFIGS, GagId, GagLifecycleState } from '../types/game';
+import { GAG_CONFIGS, GagId, GagLifecycleState, PitchId } from '../types/game';
 import { SeededRNG } from './rng';
 
 export interface GagDataPayload {
   targetX?: number;
+  targetY?: number;
   targetZ?: number;
   grabbed?: boolean;
 }
@@ -47,6 +48,7 @@ const ALL_GAG_IDS: GagId[] = [
   'allarme_auto',
   'tombino_fogna',
   'cane_palla',
+  'gabbiano_palla',
 ];
 
 export function createInitialGagSystemState(): GagSystemState {
@@ -69,6 +71,7 @@ export function createInitialGagSystemState(): GagSystemState {
 
 /**
  * Tenta di avviare una gag:
+ * - Controlla che la gag sia abilitata per il campo attuale (cfg.allowedPitches).
  * - Se force === false: rispetta il limite di massimo una gag attiva (Triggered/Beat/Resolve),
  *   il cooldown in simSteps e la probabilità deterministica tramite SeededRNG.
  * - Se force === true (pulsanti rapidi del dock): ignora probabilità e cooldown; se un'altra gag
@@ -82,9 +85,15 @@ export function tryTriggerGag(
   registry: GagActionRegistry,
   payload: GagDataPayload = {},
   force: boolean = false,
+  currentPitch?: PitchId,
 ): boolean {
   const item = gagState.items[id];
   const cfg = GAG_CONFIGS[id];
+
+  // Ogni gag può scattare solo nei campi elencati in GAG_CONFIGS[id].allowedPitches
+  if (currentPitch && !cfg.allowedPitches.includes(currentPitch)) {
+    return false;
+  }
 
   if (!force) {
     // Massimo una gag attiva alla volta (Triggered, Beat o Resolve)

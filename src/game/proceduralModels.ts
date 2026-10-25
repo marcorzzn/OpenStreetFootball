@@ -90,10 +90,37 @@ export function createBallTexture(profileId: BallProfileId, maxAnisotropy: numbe
 
 export function createPitchTexture(pitchId: PitchId, maxAnisotropy: number): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
+  const cfg = PITCH_CONFIGS[pitchId];
+
+  if (pitchId === 'spiaggia') {
+    // Texture sabbia leggera max 256x256 ripetuta (RepeatWrapping)
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = cfg.groundColor;
+    ctx.fillRect(0, 0, 256, 256);
+
+    // Granelli di sabbia e leggere ondulazioni dorate
+    for (let i = 0; i < 420; i++) {
+      const x = (i * 73) % 256;
+      const y = (i * 137) % 256;
+      const w = 3 + (i % 7);
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(255,250,220,0.09)' : 'rgba(160,115,55,0.08)';
+      ctx.fillRect(x, y, w, 2);
+    }
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(4, 3);
+    tex.anisotropy = maxAnisotropy;
+    return tex;
+  }
+
   canvas.width = 512;
   canvas.height = 512;
   const ctx = canvas.getContext('2d')!;
-  const cfg = PITCH_CONFIGS[pitchId];
 
   // Base surface
   ctx.fillStyle = cfg.groundColor;
@@ -303,6 +330,15 @@ export interface DogRig {
   homeZ: number;
 }
 
+export interface SeagullRig {
+  root: THREE.Group;
+  leftWing: THREE.Mesh;
+  rightWing: THREE.Mesh;
+  homeX: number;
+  homeY: number;
+  homeZ: number;
+}
+
 export interface CourtyardEnvironmentRefs {
   group: THREE.Group;
   groundMat: THREE.MeshStandardMaterial;
@@ -312,17 +348,12 @@ export interface CourtyardEnvironmentRefs {
   carHeadlights: THREE.Mesh[];
   signoraBalconyGroup: THREE.Group;
   dogRig: DogRig;
+  seagullRig: SeagullRig;
   goalPosts: THREE.Vector3[];
 }
 
 /**
- * Builds the nostalgic Italian Courtyard ("Cortile dei Celestini") with:
- * - Jacket / Stone / Pipe Goalposts
- * - Signora Maria's Floral Balcony (Left flank trigger)
- * - Breakable Condo Window with Glass Shards (Back-Right flank)
- * - Parked Vintage Hatchback with Hazard Lights (Left Corner gate)
- * - Sloped Terracotta Roof Overhang
- * - Storm Drain Grate ("Tombino")
+ * Builds the nostalgic Street Pitch or Beach Environment with low-poly procedural primitives.
  */
 export function buildCourtyardEnvironment(
   pitchId: PitchId,
@@ -330,6 +361,7 @@ export function buildCourtyardEnvironment(
 ): CourtyardEnvironmentRefs {
   const group = new THREE.Group();
   const pitchCfg = PITCH_CONFIGS[pitchId];
+  const isBeach = pitchId === 'spiaggia';
 
   // Field Dimensions: 32m long (X: -16 to +16), 20m wide (Z: -10 to +10)
   const pitchTex = createPitchTexture(pitchId, maxAnisotropy);
@@ -337,18 +369,39 @@ export function buildCourtyardEnvironment(
   groundGeo.rotateX(-Math.PI / 2);
   const groundMat = new THREE.MeshStandardMaterial({
     map: pitchTex,
-    roughness: 0.88,
-    metalness: 0.05,
+    roughness: isBeach ? 0.96 : 0.88,
+    metalness: 0.02,
   });
   const ground = new THREE.Mesh(groundGeo, groundMat);
   ground.receiveShadow = true;
   group.add(ground);
 
-  // Outer Surrounding Sidewalk / Street Apron (No floating box in void)
+  // If on beach, draw simple sand-furrow lines on top of the repeated 256x256 sand texture
+  if (isBeach) {
+    const sandLineMat = new THREE.MeshBasicMaterial({
+      color: 0xfef9c3,
+      transparent: true,
+      opacity: 0.45,
+    });
+    const addLine = (w: number, h: number, x: number, z: number) => {
+      const g = new THREE.PlaneGeometry(w, h);
+      g.rotateX(-Math.PI / 2);
+      const m = new THREE.Mesh(g, sandLineMat);
+      m.position.set(x, 0.012, z);
+      group.add(m);
+    };
+    addLine(30.8, 0.14, 0, -9.2);
+    addLine(30.8, 0.14, 0, 9.2);
+    addLine(0.14, 18.4, -15.4, 0);
+    addLine(0.14, 18.4, 15.4, 0);
+    addLine(0.14, 18.4, 0, 0);
+  }
+
+  // Outer Surrounding Sidewalk / Beach Sand Apron
   const apronGeo = new THREE.PlaneGeometry(80, 60);
   apronGeo.rotateX(-Math.PI / 2);
   const apronMat = new THREE.MeshStandardMaterial({
-    color: pitchId === 'terra' ? 0x57534e : 0x27272a,
+    color: isBeach ? 0xdcbe82 : pitchId === 'terra' ? 0x57534e : 0x27272a,
     roughness: 0.95,
   });
   const apron = new THREE.Mesh(apronGeo, apronMat);
@@ -356,15 +409,18 @@ export function buildCourtyardEnvironment(
   apron.receiveShadow = true;
   group.add(apron);
 
-  // Low Perimeter Courtyard Bounce Curbs
-  const curbMat = new THREE.MeshStandardMaterial({ color: 0xa8a29e, roughness: 0.85 });
-  const northCurb = new THREE.Mesh(new THREE.BoxGeometry(32.8, 0.7, 0.5), curbMat);
-  northCurb.position.set(0, 0.35, -10.25);
+  // Low Perimeter Courtyard Bounce Curbs / Beach Driftwood Boardwalk
+  const curbMat = new THREE.MeshStandardMaterial({
+    color: isBeach ? 0xb48a5a : 0xa8a29e,
+    roughness: 0.85,
+  });
+  const northCurb = new THREE.Mesh(new THREE.BoxGeometry(32.8, isBeach ? 0.45 : 0.7, 0.5), curbMat);
+  northCurb.position.set(0, isBeach ? 0.225 : 0.35, -10.25);
   northCurb.receiveShadow = true;
   group.add(northCurb);
 
-  const southCurb = new THREE.Mesh(new THREE.BoxGeometry(32.8, 0.7, 0.5), curbMat);
-  southCurb.position.set(0, 0.35, 10.25);
+  const southCurb = new THREE.Mesh(new THREE.BoxGeometry(32.8, isBeach ? 0.45 : 0.7, 0.5), curbMat);
+  southCurb.position.set(0, isBeach ? 0.225 : 0.35, 10.25);
   southCurb.receiveShadow = true;
   group.add(southCurb);
 
@@ -381,7 +437,6 @@ export function buildCourtyardEnvironment(
     postGroup.position.copy(pos);
 
     if (pitchCfg.goalpostStyle === 'giubbotti') {
-      // Nostalgic Pile of School Backpacks & Folded Puffer Jackets as Goalposts!
       const jacketColor = idx < 2 ? 0x0284c7 : 0xe11d48;
       const bagMat = new THREE.MeshStandardMaterial({ color: jacketColor, roughness: 0.75 });
       const sleeveMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.6 });
@@ -397,7 +452,6 @@ export function buildCourtyardEnvironment(
       topJacket.castShadow = true;
       postGroup.add(topJacket);
 
-      // Subtle vertical laser/chalk pole indicator so FPS players can spot the goal height clearly
       const markerMat = new THREE.MeshBasicMaterial({
         color: idx < 2 ? 0x38bdf8 : 0xf43f5e,
         transparent: true,
@@ -412,6 +466,33 @@ export function buildCourtyardEnvironment(
       rock.position.y = 0.35;
       rock.castShadow = true;
       postGroup.add(rock);
+    } else if (pitchCfg.goalpostStyle === 'ciabatte') {
+      // Porte da spiaggia fatte con secchiello rovesciato, ciabatta gigante e palo di legno leggero
+      const bucketColor = idx < 2 ? 0x0ea5e9 : 0xf43f5e;
+      const bucketMat = new THREE.MeshStandardMaterial({ color: bucketColor, roughness: 0.55 });
+      const strapMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.6 });
+      const bambooMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.85 });
+
+      // Secchiello da spiaggia rovesciato sulla sabbia
+      const bucket = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.34, 0.52, 8), bucketMat);
+      bucket.position.y = 0.26;
+      bucket.castShadow = true;
+      postGroup.add(bucket);
+
+      // Ciabatta da mare poggiata accanto al secchiello
+      const flipFlopSole = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.08, 0.62), strapMat);
+      flipFlopSole.position.set(0, 0.04, idx % 2 === 0 ? 0.36 : -0.36);
+      postGroup.add(flipFlopSole);
+
+      const flipFlopStrap = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.1, 0.14), bucketMat);
+      flipFlopStrap.position.set(0, 0.1, idx % 2 === 0 ? 0.36 : -0.36);
+      postGroup.add(flipFlopStrap);
+
+      // Palo di legno piantato nel secchiello per indicare l'altezza porta in FPS/TV
+      const bambooPole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 2.3, 6), bambooMat);
+      bambooPole.position.y = 1.15;
+      bambooPole.castShadow = true;
+      postGroup.add(bambooPole);
     } else {
       const pipeMat = new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.45, metalness: 0.6 });
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 2.4, 10), pipeMat);
@@ -423,7 +504,7 @@ export function buildCourtyardEnvironment(
     group.add(postGroup);
   });
 
-  // Crossbars for pipe goals or visual net backstop
+  // Crossbars / visual net backstop
   [-15.5, 15.5].forEach((gx, idx) => {
     const netMat = new THREE.MeshBasicMaterial({
       color: idx === 0 ? 0x38bdf8 : 0xf43f5e,
@@ -436,52 +517,12 @@ export function buildCourtyardEnvironment(
     group.add(backNet);
   });
 
-  // Italian Condo Building Backdrop (North Side Z = -12.5)
   const plasterMat = new THREE.MeshStandardMaterial({ color: 0xe09f67, roughness: 0.9 });
   const roofMat = new THREE.MeshStandardMaterial({ color: 0x9c4127, roughness: 0.8 });
+  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.9 });
 
-  const mainPalazzo = new THREE.Mesh(new THREE.BoxGeometry(28, 9.5, 4), plasterMat);
-  mainPalazzo.position.set(0, 4.75, -12.8);
-  mainPalazzo.receiveShadow = true;
-  group.add(mainPalazzo);
-
-  // Sloped Terracotta Roof Overhang (Gag Trigger: Pallone sul Tetto when Y > 5.8, Z < -9.5)
-  const roof = new THREE.Mesh(new THREE.BoxGeometry(28.6, 0.6, 5.2), roofMat);
-  roof.position.set(0, 9.6, -12.5);
-  roof.rotation.x = 0.18;
-  group.add(roof);
-
-  // GAG 1: Signora Maria's Balcony (North-West Building Face X = -8, Y = 3.2, Z = -10.5)
+  // Refs shared across all pitches
   const signoraBalconyGroup = new THREE.Group();
-  signoraBalconyGroup.position.set(-8, 2.8, -10.4);
-  const railMat = new THREE.MeshStandardMaterial({ color: 0x27272a, metalness: 0.6, roughness: 0.4 });
-  const balconySlab = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.3, 1.6), curbMat);
-  const balconyRail = new THREE.Mesh(new THREE.BoxGeometry(4.2, 1.0, 1.6), railMat);
-  balconyRail.position.y = 0.6;
-  signoraBalconyGroup.add(balconySlab, balconyRail);
-
-  // Signora Maria Silhouette figure on the balcony
-  const mariaDress = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.24, 0.35, 1.1, 10),
-    new THREE.MeshStandardMaterial({ color: 0x7e22ce, roughness: 0.8 }),
-  );
-  mariaDress.position.set(0, 0.7, 0);
-  const mariaHead = new THREE.Mesh(
-    new THREE.SphereGeometry(0.2, 10, 10),
-    new THREE.MeshStandardMaterial({ color: 0xfde68a, roughness: 0.7 }),
-  );
-  mariaHead.position.set(0, 1.4, 0);
-  signoraBalconyGroup.add(mariaDress, mariaHead);
-  group.add(signoraBalconyGroup);
-
-  // GAG 2: Fragile Glass Window (North-East Building Face X = +7.5, Y = 3.2, Z = -10.7)
-  const windowFrame = new THREE.Mesh(
-    new THREE.BoxGeometry(3.4, 2.6, 0.25),
-    new THREE.MeshStandardMaterial({ color: 0x451a03, roughness: 0.8 }),
-  );
-  windowFrame.position.set(7.5, 3.2, -10.75);
-  group.add(windowFrame);
-
   const windowGlassMat = new THREE.MeshStandardMaterial({
     color: 0x7dd3fc,
     roughness: 0.15,
@@ -490,65 +531,187 @@ export function buildCourtyardEnvironment(
     opacity: 0.75,
   });
   const windowGlassMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 2.2), windowGlassMat);
-  windowGlassMesh.position.set(7.5, 3.2, -10.6);
-  group.add(windowGlassMesh);
-
   const shardsGroup = new THREE.Group();
-  shardsGroup.position.set(7.5, 3.2, -10.5);
-  group.add(shardsGroup);
-
-  // GAG 3: Parked Vintage Panda/Hatchback Car (South-West Corner X = -12, Z = 12.2)
   const carGroup = new THREE.Group();
-  carGroup.position.set(-11.5, 0, 12.2);
-  const carBodyMat = new THREE.MeshStandardMaterial({ color: 0x0f766e, roughness: 0.4, metalness: 0.3 });
-  const carCabinMat = new THREE.MeshStandardMaterial({ color: 0x134e4a, roughness: 0.3, metalness: 0.4 });
-  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.9 });
-
-  const lowerChassis = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.8, 1.8), carBodyMat);
-  lowerChassis.position.y = 0.65;
-  lowerChassis.castShadow = true;
-  carGroup.add(lowerChassis);
-
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.72, 1.65), carCabinMat);
-  cabin.position.set(-0.2, 1.38, 0);
-  cabin.castShadow = true;
-  carGroup.add(cabin);
-
-  [
-    [-1.2, 0.35, 0.9],
-    [1.2, 0.35, 0.9],
-    [-1.2, 0.35, -0.9],
-    [1.2, 0.35, -0.9],
-  ].forEach(([wx, wy, wz]) => {
-    const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.25, 12), wheelMat);
-    wheel.rotation.x = Math.PI / 2;
-    wheel.position.set(wx, wy, wz);
-    carGroup.add(wheel);
-  });
-
   const headlightMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
   const hlLeft = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.22, 0.32), headlightMat);
-  hlLeft.position.set(1.92, 0.7, 0.6);
   const hlRight = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.22, 0.32), headlightMat);
-  hlRight.position.set(1.92, 0.7, -0.6);
-  carGroup.add(hlLeft, hlRight);
-  group.add(carGroup);
 
-  // GAG 4: Storm Drain Grate ("Tombino" at X = 9.5, Z = 8.8)
-  const drainGrate = new THREE.Mesh(
-    new THREE.BoxGeometry(1.3, 0.04, 1.3),
-    new THREE.MeshStandardMaterial({ color: 0x18181b, metalness: 0.8, roughness: 0.4 }),
-  );
-  drainGrate.position.set(9.5, 0.02, 8.8);
-  group.add(drainGrate);
+  if (isBeach) {
+    // SPIAGGIA: Mare come piano semplice sullo sfondo con un solo materiale colorato (niente shader/riflessi)
+    const seaGeo = new THREE.PlaneGeometry(110, 36);
+    seaGeo.rotateX(-Math.PI / 2);
+    const seaMat = new THREE.MeshStandardMaterial({
+      color: 0x0284c7,
+      roughness: 0.85,
+      metalness: 0.0,
+    });
+    const seaPlane = new THREE.Mesh(seaGeo, seaMat);
+    seaPlane.position.set(0, -0.015, -29.0);
+    group.add(seaPlane);
 
-  // GAG 5: Low-Poly Procedural Courtyard Dog (South Sideline at X = 3.5, Z = 9.4)
-  // Built from Three.js primitives (body, head, 2 ears, tail, 4 legs) reusing existing materials
+    // Sottile striscia chiara di battigia (1 solo quad = 2 triangoli)
+    const foamGeo = new THREE.PlaneGeometry(90, 0.85);
+    foamGeo.rotateX(-Math.PI / 2);
+    const foamMesh = new THREE.Mesh(
+      foamGeo,
+      new THREE.MeshBasicMaterial({ color: 0xe0f2fe, transparent: true, opacity: 0.65 }),
+    );
+    foamMesh.position.set(0, 0.01, -11.2);
+    group.add(foamMesh);
+
+    // 2 Cabine da spiaggia low-poly in legno (Nord-Ovest e Nord-Est)
+    const cabinWoodMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.85 });
+    const cabinDoorMat = new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.8 });
+    [-6.5, 6.5].forEach((cx) => {
+      const beachCabin = new THREE.Group();
+      beachCabin.position.set(cx, 0, -11.8);
+
+      const box = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.6, 2.0), cabinWoodMat);
+      box.position.y = 1.3;
+      box.castShadow = true;
+      beachCabin.add(box);
+
+      const door = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.9, 0.08), cabinDoorMat);
+      door.position.set(0, 1.0, 1.02);
+      beachCabin.add(door);
+
+      const cabinRoof = new THREE.Mesh(new THREE.ConeGeometry(1.75, 0.85, 4), roofMat);
+      cabinRoof.rotation.y = Math.PI / 4;
+      cabinRoof.position.y = 3.02;
+      beachCabin.add(cabinRoof);
+
+      group.add(beachCabin);
+    });
+
+    // 3 Ombrelloni da spiaggia low-poly (palo + cono a 8 spicchi)
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0xf5f5f4, roughness: 0.5 });
+    const umbrellaColors = [0xf97316, 0x0ea5e9, 0xe11d48];
+    [-12.0, 0.0, 12.0].forEach((ux, i) => {
+      const umbGroup = new THREE.Group();
+      umbGroup.position.set(ux, 0, -11.3);
+
+      const uPole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.7, 6), poleMat);
+      uPole.position.y = 1.35;
+      umbGroup.add(uPole);
+
+      const canopyMat = new THREE.MeshStandardMaterial({ color: umbrellaColors[i], roughness: 0.75 });
+      const canopy = new THREE.Mesh(new THREE.ConeGeometry(1.85, 0.7, 8), canopyMat);
+      canopy.position.y = 2.65;
+      canopy.castShadow = true;
+      umbGroup.add(canopy);
+
+      group.add(umbGroup);
+    });
+  } else {
+    // CORTILE / STRADA / TERRA: Condominio, Balcone Signora Maria, Finestra, Tetto, Auto, Tombino
+    const mainPalazzo = new THREE.Mesh(new THREE.BoxGeometry(28, 9.5, 4), plasterMat);
+    mainPalazzo.position.set(0, 4.75, -12.8);
+    mainPalazzo.receiveShadow = true;
+    group.add(mainPalazzo);
+
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(28.6, 0.6, 5.2), roofMat);
+    roof.position.set(0, 9.6, -12.5);
+    roof.rotation.x = 0.18;
+    group.add(roof);
+
+    // GAG 1: Signora Maria's Balcony
+    signoraBalconyGroup.position.set(-8, 2.8, -10.4);
+    const railMat = new THREE.MeshStandardMaterial({ color: 0x27272a, metalness: 0.6, roughness: 0.4 });
+    const balconySlab = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.3, 1.6), curbMat);
+    const balconyRail = new THREE.Mesh(new THREE.BoxGeometry(4.2, 1.0, 1.6), railMat);
+    balconyRail.position.y = 0.6;
+    signoraBalconyGroup.add(balconySlab, balconyRail);
+
+    const mariaDress = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.24, 0.35, 1.1, 10),
+      new THREE.MeshStandardMaterial({ color: 0x7e22ce, roughness: 0.8 }),
+    );
+    mariaDress.position.set(0, 0.7, 0);
+    const mariaHead = new THREE.Mesh(
+      new THREE.SphereGeometry(0.2, 10, 10),
+      new THREE.MeshStandardMaterial({ color: 0xfde68a, roughness: 0.7 }),
+    );
+    mariaHead.position.set(0, 1.4, 0);
+    signoraBalconyGroup.add(mariaDress, mariaHead);
+    group.add(signoraBalconyGroup);
+
+    // GAG 2: Fragile Glass Window
+    const windowFrame = new THREE.Mesh(
+      new THREE.BoxGeometry(3.4, 2.6, 0.25),
+      new THREE.MeshStandardMaterial({ color: 0x451a03, roughness: 0.8 }),
+    );
+    windowFrame.position.set(7.5, 3.2, -10.75);
+    group.add(windowFrame);
+
+    windowGlassMesh.position.set(7.5, 3.2, -10.6);
+    group.add(windowGlassMesh);
+
+    shardsGroup.position.set(7.5, 3.2, -10.5);
+    group.add(shardsGroup);
+
+    // GAG 3: Parked Auto
+    carGroup.position.set(-11.5, 0, 12.2);
+    const carBodyMat = new THREE.MeshStandardMaterial({ color: 0x0f766e, roughness: 0.4, metalness: 0.3 });
+    const carCabinMat = new THREE.MeshStandardMaterial({ color: 0x134e4a, roughness: 0.3, metalness: 0.4 });
+
+    const lowerChassis = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.8, 1.8), carBodyMat);
+    lowerChassis.position.y = 0.65;
+    lowerChassis.castShadow = true;
+    carGroup.add(lowerChassis);
+
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.72, 1.65), carCabinMat);
+    cabin.position.set(-0.2, 1.38, 0);
+    cabin.castShadow = true;
+    carGroup.add(cabin);
+
+    [
+      [-1.2, 0.35, 0.9],
+      [1.2, 0.35, 0.9],
+      [-1.2, 0.35, -0.9],
+      [1.2, 0.35, -0.9],
+    ].forEach(([wx, wy, wz]) => {
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.25, 12), wheelMat);
+      wheel.rotation.x = Math.PI / 2;
+      wheel.position.set(wx, wy, wz);
+      carGroup.add(wheel);
+    });
+
+    hlLeft.position.set(1.92, 0.7, 0.6);
+    hlRight.position.set(1.92, 0.7, -0.6);
+    carGroup.add(hlLeft, hlRight);
+    group.add(carGroup);
+
+    // GAG 4: Storm Drain Grate ("Tombino")
+    const drainGrate = new THREE.Mesh(
+      new THREE.BoxGeometry(1.3, 0.04, 1.3),
+      new THREE.MeshStandardMaterial({ color: 0x18181b, metalness: 0.8, roughness: 0.4 }),
+    );
+    drainGrate.position.set(9.5, 0.02, 8.8);
+    group.add(drainGrate);
+
+    // Streetlamps for Night / Sunset atmosphere
+    [-12, 0, 12].forEach((lx) => {
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.08, 0.11, 6.5, 8),
+        new THREE.MeshStandardMaterial({ color: 0x27272a, metalness: 0.7, roughness: 0.4 }),
+      );
+      pole.position.set(lx, 3.25, -10.5);
+      const bulb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.24, 10, 8),
+        new THREE.MeshBasicMaterial({ color: 0xfde047 }),
+      );
+      bulb.position.set(lx, 6.5, -10.1);
+      group.add(pole, bulb);
+    });
+  }
+
+  // GAG 5: Low-Poly Procedural Dog (South Sideline at X = 3.5, Z = 9.4 — present on all pitches including beach)
   const dogHomeX = 3.5;
   const dogHomeZ = 9.4;
   const dogRoot = new THREE.Group();
   dogRoot.position.set(dogHomeX, 0, dogHomeZ);
-  dogRoot.rotation.y = Math.PI; // Facing North toward the pitch
+  dogRoot.rotation.y = Math.PI;
 
   const dogBody = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.3, 0.68), plasterMat);
   dogBody.position.set(0, 0.36, 0);
@@ -592,23 +755,34 @@ export function buildCourtyardEnvironment(
     dogRoot.add(leg);
     return leg;
   });
-
   group.add(dogRoot);
 
-  // Streetlamps for Night / Sunset atmosphere
-  [-12, 0, 12].forEach((lx) => {
-    const pole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.08, 0.11, 6.5, 8),
-      new THREE.MeshStandardMaterial({ color: 0x27272a, metalness: 0.7, roughness: 0.4 }),
-    );
-    pole.position.set(lx, 3.25, -10.5);
-    const bulb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.24, 10, 8),
-      new THREE.MeshBasicMaterial({ color: 0xfde047 }),
-    );
-    bulb.position.set(lx, 6.5, -10.1);
-    group.add(pole, bulb);
-  });
+  // GAG 6 (Spiaggia): Low-Poly Procedural Seagull perched on West Cabin Roof
+  const gullHomeX = -6.5;
+  const gullHomeY = 3.45;
+  const gullHomeZ = -11.8;
+  const gullRoot = new THREE.Group();
+  gullRoot.position.set(gullHomeX, gullHomeY, gullHomeZ);
+  gullRoot.visible = isBeach;
+
+  const gullWhiteMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.7 });
+  const gullBeakMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.6 });
+
+  const gullBody = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.2, 0.46), gullWhiteMat);
+  gullRoot.add(gullBody);
+
+  const gullBeak = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.2, 5), gullBeakMat);
+  gullBeak.rotation.x = Math.PI / 2;
+  gullBeak.position.set(0, 0.04, 0.3);
+  gullRoot.add(gullBeak);
+
+  const wingGeo = new THREE.BoxGeometry(0.48, 0.04, 0.22);
+  const leftWing = new THREE.Mesh(wingGeo, gullWhiteMat);
+  leftWing.position.set(-0.28, 0.06, 0);
+  const rightWing = new THREE.Mesh(wingGeo, gullWhiteMat);
+  rightWing.position.set(0.28, 0.06, 0);
+  gullRoot.add(leftWing, rightWing);
+  group.add(gullRoot);
 
   return {
     group,
@@ -624,6 +798,14 @@ export function buildCourtyardEnvironment(
       tail: dogTail,
       homeX: dogHomeX,
       homeZ: dogHomeZ,
+    },
+    seagullRig: {
+      root: gullRoot,
+      leftWing,
+      rightWing,
+      homeX: gullHomeX,
+      homeY: gullHomeY,
+      homeZ: gullHomeZ,
     },
     goalPosts,
   };

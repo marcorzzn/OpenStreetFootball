@@ -3,6 +3,10 @@ import { BallProfileId, GagId } from '../types/game';
 class SoundEngine {
   private ctx: AudioContext | null = null;
   public muted: boolean = false;
+  public wavesEnabled: boolean = true;
+  private wavesSource: AudioBufferSourceNode | null = null;
+  private wavesGain: GainNode | null = null;
+  private wavesLfo: OscillatorNode | null = null;
 
   private ensureContext(): AudioContext | null {
     if (this.muted) return null;
@@ -303,6 +307,31 @@ class SoundEngine {
         osc.start(start);
         osc.stop(start + 0.15);
       });
+    } else if (gag === 'gabbiano_palla') {
+      // Synthesized seagull cry ("KREE-EE!")
+      [0, 0.24].forEach((offset, idx) => {
+        const start = now + offset;
+        const osc = ctx.createOscillator();
+        const filter = ctx.createBiquadFilter();
+        const gain = ctx.createGain();
+
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(idx === 0 ? 1450 : 1620, start);
+        osc.frequency.exponentialRampToValueAtTime(820, start + 0.2);
+
+        filter.type = 'bandpass';
+        filter.frequency.setValueAtTime(1500, start);
+        filter.Q.setValueAtTime(3.2, start);
+
+        gain.gain.setValueAtTime(0.18, start);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.21);
+
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + 0.22);
+      });
     }
   }
 
@@ -329,6 +358,105 @@ class SoundEngine {
     gain.connect(ctx.destination);
     osc.start(now);
     osc.stop(now + 0.1);
+  }
+
+  /**
+   * Breve suono sintetizzato di festeggiamento ("ohhh!" ascendente con oscillatori) per Tunnel (+1) e Cappello (+1).
+   */
+  public playTrickCheer() {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    [1, 1.25].forEach((ratio) => {
+      const osc = ctx.createOscillator();
+      const filter = ctx.createBiquadFilter();
+      const gain = ctx.createGain();
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(220 * ratio, now);
+      osc.frequency.exponentialRampToValueAtTime(440 * ratio, now + 0.34);
+
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(520, now);
+      filter.frequency.exponentialRampToValueAtTime(980, now + 0.34);
+      filter.Q.setValueAtTime(1.8, now);
+
+      gain.gain.setValueAtTime(0.01, now);
+      gain.gain.linearRampToValueAtTime(0.22, now + 0.06);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.39);
+    });
+  }
+
+  /**
+   * Attiva o disattiva il fondale sintetizzato leggero di onde del mare per il campo Spiaggia.
+   */
+  public setBeachWavesActive(shouldPlay: boolean) {
+    const active = shouldPlay && this.wavesEnabled && !this.muted;
+    if (!active) {
+      if (this.wavesSource) {
+        try {
+          this.wavesSource.stop();
+          this.wavesLfo?.stop();
+        } catch {
+          // ignore
+        }
+        this.wavesSource.disconnect();
+        this.wavesGain?.disconnect();
+        this.wavesLfo?.disconnect();
+        this.wavesSource = null;
+        this.wavesGain = null;
+        this.wavesLfo = null;
+      }
+      return;
+    }
+
+    if (this.wavesSource) return;
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+
+    const bufferSize = ctx.sampleRate * 3;
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+    noise.loop = true;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 210;
+
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.18; // Lento respiro delle onde (~5.5s per onda)
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 110;
+    lfo.connect(lfoGain);
+    lfoGain.connect(filter.frequency);
+
+    const gain = ctx.createGain();
+    gain.gain.value = 0.032; // Basso volume di sottofondo
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+
+    noise.start();
+    lfo.start();
+
+    this.wavesSource = noise;
+    this.wavesGain = gain;
+    this.wavesLfo = lfo;
   }
 }
 

@@ -30,6 +30,7 @@ import {
   BALL_PROFILES,
   BallProfileId,
   CameraMode,
+  GAG_CONFIGS,
   GagId,
   GameMode,
   PITCH_CONFIGS,
@@ -58,6 +59,9 @@ export default function App() {
   const [weather, setWeather] = useState<WeatherId>('tramonto');
   const [pitch, setPitch] = useState<PitchId>('cortile');
   const [streetRule, setStreetRule] = useState<StreetRuleId>('classica');
+  const [ruleTunnelEnabled, setRuleTunnelEnabled] = useState<boolean>(true);
+  const [ruleCappelloEnabled, setRuleCappelloEnabled] = useState<boolean>(true);
+  const [beachWavesEnabled, setBeachWavesEnabled] = useState<boolean>(true);
   const [renderScale, setRenderScale] = useState<number>(1.0);
   const [autoRenderScale, setAutoRenderScale] = useState<boolean>(false);
   const [showPerfMonitor, setShowPerfMonitor] = useState<boolean>(true);
@@ -110,6 +114,7 @@ export default function App() {
     physicsStepsLastFrame: 1,
     cameraFar: 140,
     activeGagStateLabel: 'nessuna gag',
+    trickPopup: null,
   });
 
   const inputManagerRef = useRef<InputManager | null>(null);
@@ -361,6 +366,8 @@ export default function App() {
         weather={weather}
         pitch={pitch}
         streetRule={streetRule}
+        ruleTunnelEnabled={ruleTunnelEnabled}
+        ruleCappelloEnabled={ruleCappelloEnabled}
         renderScale={renderScale}
         gagsEnabled={gagsEnabled}
         triggerGagRequest={triggerGagRequest}
@@ -373,7 +380,7 @@ export default function App() {
         onTelemetryUpdate={setTelemetry}
       />
 
-      {/* In-Game Performance Monitor Badge (stats-gl style: FPS, Frame ms, Physics Steps, Draw Calls, Triangles, Render Scale + Weather & camera.far) */}
+      {/* In-Game Performance Monitor Badge (stats-gl style: FPS, Frame ms, Physics Steps, Draw Calls, Triangles, Render Scale + Weather/camera.far + Pitch/Rules) */}
       {showPerfMonitor && (
         <div className="fixed top-3 left-3 z-20 px-3 py-1.5 bg-stone-950/92 border border-stone-700/80 rounded-lg font-mono-num text-[11px] text-stone-300 flex flex-col gap-0.5 pointer-events-auto">
           <div className="flex items-center gap-2.5">
@@ -403,6 +410,20 @@ export default function App() {
             <span>·</span>
             <span>
               Gag: <strong className="text-amber-300">{telemetry.activeGagStateLabel}</strong>
+            </span>
+          </div>
+          <div className="flex items-center gap-2 text-[10px] text-stone-400 pl-6">
+            <span>
+              Campo: <strong className="text-stone-200">{currentPitch.name}</strong> ({pitch})
+            </span>
+            <span>·</span>
+            <span>
+              Regole:{' '}
+              <strong className="text-emerald-300">
+                {STREET_RULES[streetRule].name}
+                {ruleTunnelEnabled ? ' + Tunnel' : ''}
+                {ruleCappelloEnabled ? ' + Cappello' : ''}
+              </strong>
             </span>
           </div>
         </div>
@@ -753,9 +774,16 @@ export default function App() {
             </div>
           )}
 
+          {/* Short Street Trick Popup ("TUNNEL +1" / "CAPPELLO +1") */}
+          {telemetry.trickPopup && (
+            <div className="fixed top-16 left-1/2 -translate-x-1/2 z-20 px-5 py-1.5 bg-emerald-500 text-stone-950 font-display text-2xl font-extrabold tracking-wider rounded-xl shadow-lg border-2 border-amber-300 pointer-events-none">
+              {telemetry.trickPopup.label} ({telemetry.trickPopup.team === 'blue' ? 'AZZURRI' : 'RIVALI'})
+            </div>
+          )}
+
           {/* Gag or Goal Dynamic Notification Toast */}
           {(telemetry.activeGag || telemetry.lastBanner) && (
-            <div className="fixed top-20 left-1/2 -translate-x-1/2 z-10 max-w-md w-[92vw] px-4 py-3 bg-stone-950/95 border border-amber-500/70 rounded-xl shadow-xl text-center pointer-events-none">
+            <div className="fixed top-28 left-1/2 -translate-x-1/2 z-10 max-w-md w-[92vw] px-4 py-3 bg-stone-950/95 border border-amber-500/70 rounded-xl shadow-xl text-center pointer-events-none">
               <div className="font-display text-xl font-extrabold tracking-wide text-amber-400">
                 {telemetry.activeGag ? telemetry.activeGag.title : telemetry.lastBanner?.title}
               </div>
@@ -1034,10 +1062,29 @@ export default function App() {
                   </div>
 
                   <div className="bg-stone-900 p-2.5 rounded-lg border border-stone-800">
-                    <label className="block text-[11px] text-stone-400 mb-1 flex items-center gap-1">
-                      <Compass className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Campo Nostalgia ({currentPitch.name})</span>
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] text-stone-400 flex items-center gap-1">
+                        <Compass className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Campo ({currentPitch.name})</span>
+                      </label>
+                      {pitch === 'spiaggia' && (
+                        <button
+                          onClick={() => {
+                            const next = !beachWavesEnabled;
+                            setBeachWavesEnabled(next);
+                            soundEngine.wavesEnabled = next;
+                            soundEngine.setBeachWavesActive(isPlaying && !isPaused && next);
+                          }}
+                          className={`px-2 py-0.5 text-[10px] font-semibold rounded border cursor-pointer ${
+                            beachWavesEnabled
+                              ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
+                              : 'bg-stone-800 text-stone-400 border-stone-700'
+                          }`}
+                        >
+                          Onde mare: {beachWavesEnabled ? 'Sì' : 'No'}
+                        </button>
+                      )}
+                    </div>
                     <select
                       value={pitch}
                       onChange={(e) => setPitch(e.target.value as PitchId)}
@@ -1054,12 +1101,12 @@ export default function App() {
                   <div className="bg-stone-900 p-2.5 rounded-lg border border-stone-800">
                     <label className="block text-[11px] text-stone-400 mb-1 flex items-center gap-1">
                       <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Regolamento da Strada</span>
+                      <span>Regolamento da Strada + Bonus (+1)</span>
                     </label>
                     <select
                       value={streetRule}
                       onChange={(e) => setStreetRule(e.target.value as StreetRuleId)}
-                      className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded px-2.5 py-1.5 border border-stone-700"
+                      className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded px-2.5 py-1.5 border border-stone-700 mb-1.5"
                     >
                       {Object.values(STREET_RULES).map((r) => (
                         <option key={r.id} value={r.id}>
@@ -1067,11 +1114,31 @@ export default function App() {
                         </option>
                       ))}
                     </select>
+                    <div className="flex items-center gap-2">
+                      <label className="flex items-center gap-1.5 text-[11px] font-semibold text-stone-200 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={ruleTunnelEnabled}
+                          onChange={(e) => setRuleTunnelEnabled(e.target.checked)}
+                          className="rounded accent-emerald-500"
+                        />
+                        <span>Tunnel (+1)</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 text-[11px] font-semibold text-stone-200 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={ruleCappelloEnabled}
+                          onChange={(e) => setRuleCappelloEnabled(e.target.checked)}
+                          className="rounded accent-emerald-500"
+                        />
+                        <span>Cappello (+1)</span>
+                      </label>
+                    </div>
                   </div>
                 </div>
               )}
 
-              {/* Tab 3: Courtyard Gags & Interactive Triggers */}
+              {/* Tab 3: Courtyard / Beach Gags & Interactive Triggers (filtered by current pitch) */}
               {activeDockTab === 'gag' && (
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -1095,47 +1162,22 @@ export default function App() {
                       </button>
                     </div>
                     <span className="text-[11px] text-stone-400 hidden lg:inline">
-                      (Con "No" nessuna gag scatta da sola; i pulsanti rapidi qui accanto restano sempre attivi per i test)
+                      (Gag disponibili su {currentPitch.name}:)
                     </span>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <button
-                      onClick={() => setTriggerGagRequest({ gag: 'vecchia_buca', seq: Date.now() })}
-                      className="px-2.5 py-1.5 text-xs font-semibold bg-purple-950/90 hover:bg-purple-900 text-purple-200 border border-purple-700/70 rounded-lg cursor-pointer whitespace-nowrap"
-                    >
-                      Vecchia Buca Palla
-                    </button>
-                    <button
-                      onClick={() => setTriggerGagRequest({ gag: 'finestra_rotta', seq: Date.now() })}
-                      className="px-2.5 py-1.5 text-xs font-semibold bg-sky-950/90 hover:bg-sky-900 text-sky-200 border border-sky-700/70 rounded-lg cursor-pointer whitespace-nowrap"
-                    >
-                      Rompi Finestra
-                    </button>
-                    <button
-                      onClick={() => setTriggerGagRequest({ gag: 'palla_tetto', seq: Date.now() })}
-                      className="px-2.5 py-1.5 text-xs font-semibold bg-orange-950/90 hover:bg-orange-900 text-orange-200 border border-orange-700/70 rounded-lg cursor-pointer whitespace-nowrap"
-                    >
-                      Palla sul Tetto
-                    </button>
-                    <button
-                      onClick={() => setTriggerGagRequest({ gag: 'allarme_auto', seq: Date.now() })}
-                      className="px-2.5 py-1.5 text-xs font-semibold bg-emerald-950/90 hover:bg-emerald-900 text-emerald-200 border border-emerald-700/70 rounded-lg cursor-pointer whitespace-nowrap"
-                    >
-                      Allarme Auto
-                    </button>
-                    <button
-                      onClick={() => setTriggerGagRequest({ gag: 'tombino_fogna', seq: Date.now() })}
-                      className="px-2.5 py-1.5 text-xs font-semibold bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-600 rounded-lg cursor-pointer whitespace-nowrap"
-                    >
-                      Palla nel Tombino
-                    </button>
-                    <button
-                      onClick={() => setTriggerGagRequest({ gag: 'cane_palla', seq: Date.now() })}
-                      className="px-2.5 py-1.5 text-xs font-semibold bg-amber-950/90 hover:bg-amber-900 text-amber-200 border border-amber-700/70 rounded-lg cursor-pointer whitespace-nowrap"
-                    >
-                      Cane Ruba Palla
-                    </button>
+                    {Object.values(GAG_CONFIGS)
+                      .filter((g) => g.allowedPitches.includes(pitch))
+                      .map((g) => (
+                        <button
+                          key={g.id}
+                          onClick={() => setTriggerGagRequest({ gag: g.id, seq: Date.now() })}
+                          className="px-2.5 py-1.5 text-xs font-semibold bg-amber-950/90 hover:bg-amber-900 text-amber-200 border border-amber-700/70 rounded-lg cursor-pointer whitespace-nowrap"
+                        >
+                          {g.label}
+                        </button>
+                      ))}
                   </div>
                 </div>
               )}
