@@ -1,0 +1,6 @@
+{
+  "name": "Cortile Celestini — Open Street Football",
+  "description": "Gioco di calcio da strada 3D open-source con visuale in Prima Persona (FPS) e Classica TV, fisica reale dei palloni (Super Santos, Bagnato, Bucato, Cuoio), meteo dinamico, gag di cortile e multiplayer Online, LAN e Locale.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

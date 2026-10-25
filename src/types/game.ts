@@ -1,0 +1,319 @@
+export type BallProfileId = 'supersantos' | 'classico' | 'bagnato' | 'bucato';
+
+export type WeatherId = 'tramonto' | 'sole' | 'pioggia' | 'vento' | 'nebbia' | 'notte';
+
+export type PitchId = 'cortile' | 'strada' | 'terra';
+
+export type StreetRuleId = 'classica' | 'chi_segna_vince' | 'tre_pali' | 'palla_avvelenata';
+
+export type CameraMode = 'classic' | 'fps';
+
+export type GameMode = 'single' | 'local_2p' | 'online_lan';
+
+export type GagId =
+  | 'vecchia_buca'
+  | 'finestra_rotta'
+  | 'palla_tetto'
+  | 'allarme_auto'
+  | 'tombino_fogna';
+
+export interface BallProfile {
+  id: BallProfileId;
+  name: string;
+  subtitle: string;
+  mass: number; // kg
+  radius: number; // m (visual/physics scaled in world units)
+  visualRadius: number;
+  restitution: number; // bounce
+  linearDrag: number;
+  rollFriction: number;
+  magnus: number; // spin curve multiplier
+  windFactor: number;
+  wobble: {
+    speedMin: number;
+    force: number;
+    freqHz: number;
+  } | null;
+  deflate: {
+    rate: number;
+    minRadius: number;
+  } | null;
+  primaryColor: string;
+  secondaryColor: string;
+}
+
+export const BALL_PROFILES: Record<BallProfileId, BallProfile> = {
+  supersantos: {
+    id: 'supersantos',
+    name: 'Super Santos',
+    subtitle: 'Plastica arancione leggera, effetto matto e traiettoria imprevedibile col vento',
+    mass: 0.18,
+    radius: 0.105,
+    visualRadius: 0.42,
+    restitution: 0.93,
+    linearDrag: 0.008,
+    rollFriction: 0.01,
+    magnus: 0.92,
+    windFactor: 2.2,
+    wobble: { speedMin: 7.0, force: 3.4, freqHz: 2.6 },
+    deflate: null,
+    primaryColor: '#ff521b',
+    secondaryColor: '#18181b',
+  },
+  classico: {
+    id: 'classico',
+    name: 'Cuoio 32 Esagoni',
+    subtitle: 'Il classico pallone da cortile cucito a mano, equilibrato e sincero',
+    mass: 0.43,
+    radius: 0.11,
+    visualRadius: 0.44,
+    restitution: 0.75,
+    linearDrag: 0.015,
+    rollFriction: 0.022,
+    magnus: 0.42,
+    windFactor: 1.0,
+    wobble: null,
+    deflate: null,
+    primaryColor: '#f4f1ea',
+    secondaryColor: '#1e293b',
+  },
+  bagnato: {
+    id: 'bagnato',
+    name: 'Cuoio Bagnato (Piombo)',
+    subtitle: 'Inzuppato di pioggia e fango: pesantissimo, rimbalza poco e fa male ai piedi',
+    mass: 0.68,
+    radius: 0.11,
+    visualRadius: 0.44,
+    restitution: 0.28,
+    linearDrag: 0.042,
+    rollFriction: 0.065,
+    magnus: 0.15,
+    windFactor: 0.45,
+    wobble: null,
+    deflate: null,
+    primaryColor: '#785a46',
+    secondaryColor: '#292524',
+  },
+  bucato: {
+    id: 'bucato',
+    name: 'Pallone Bucato',
+    subtitle: 'Forato dalle forbici della Signora Maria: floscio, sbanda e si sgonfia',
+    mass: 0.43,
+    radius: 0.11,
+    visualRadius: 0.39,
+    restitution: 0.12,
+    linearDrag: 0.12,
+    rollFriction: 0.15,
+    magnus: 0.05,
+    windFactor: 0.3,
+    wobble: { speedMin: 3.0, force: 2.1, freqHz: 4.2 },
+    deflate: { rate: 0.004, minRadius: 0.29 },
+    primaryColor: '#d97706',
+    secondaryColor: '#3f3f46',
+  },
+};
+
+export interface WeatherConfig {
+  id: WeatherId;
+  name: string;
+  description: string;
+  skyColor: string;
+  fogColor: string;
+  fogDensity: number;
+  sunColor: string;
+  sunIntensity: number;
+  hemiSky: string;
+  hemiGround: string;
+  playerGripMultiplier: number;
+  ballRestitutionMultiplier: number;
+  windVector: [number, number, number];
+}
+
+export const WEATHER_CONFIGS: Record<WeatherId, WeatherConfig> = {
+  tramonto: {
+    id: 'tramonto',
+    name: 'Tramonto Celestini',
+    description: 'Luce dorata poetica tra i palazzi, ombre lunghe e colori saturi',
+    skyColor: '#e07a5f',
+    fogColor: '#e07a5f',
+    fogDensity: 0.008,
+    sunColor: '#ffb703',
+    sunIntensity: 2.2,
+    hemiSky: '#f4a261',
+    hemiGround: '#3d405b',
+    playerGripMultiplier: 1.0,
+    ballRestitutionMultiplier: 1.0,
+    windVector: [0.6, 0, 0.2],
+  },
+  sole: {
+    id: 'sole',
+    name: 'Pomeriggio d’Estate',
+    description: 'Sole alto delle quattro, asfalto caldo e visibilità perfetta',
+    skyColor: '#60a5fa',
+    fogColor: '#93c5fd',
+    fogDensity: 0.005,
+    sunColor: '#fffbeb',
+    sunIntensity: 2.4,
+    hemiSky: '#bae6fd',
+    hemiGround: '#57534e',
+    playerGripMultiplier: 1.0,
+    ballRestitutionMultiplier: 1.05,
+    windVector: [0.2, 0, -0.1],
+  },
+  pioggia: {
+    id: 'pioggia',
+    name: 'Acquazzone Estivo',
+    description: 'Terreno scivoloso, pozzanghere e pallone che si appesantisce col tempo',
+    skyColor: '#334155',
+    fogColor: '#475569',
+    fogDensity: 0.015,
+    sunColor: '#94a3b8',
+    sunIntensity: 1.1,
+    hemiSky: '#64748b',
+    hemiGround: '#1e293b',
+    playerGripMultiplier: 0.72,
+    ballRestitutionMultiplier: 0.8,
+    windVector: [1.8, 0, 0.9],
+  },
+  vento: {
+    id: 'vento',
+    name: 'Maestrale di Quartiere',
+    description: 'Raffiche laterali che fanno curvare il Super Santos come una foglia',
+    skyColor: '#38bdf8',
+    fogColor: '#7dd3fc',
+    fogDensity: 0.007,
+    sunColor: '#fef08a',
+    sunIntensity: 2.0,
+    hemiSky: '#7dd3fc',
+    hemiGround: '#44403c',
+    playerGripMultiplier: 0.95,
+    ballRestitutionMultiplier: 1.0,
+    windVector: [5.5, 0.3, -2.8],
+  },
+  nebbia: {
+    id: 'nebbia',
+    name: 'Nebbia fitta',
+    description: 'Visibilità ridotta al minimo, massima leggerezza per GPU integrate',
+    skyColor: '#cbd5e1',
+    fogColor: '#cbd5e1',
+    fogDensity: 0.036,
+    sunColor: '#f1f5f9',
+    sunIntensity: 1.2,
+    hemiSky: '#e2e8f0',
+    hemiGround: '#64748b',
+    playerGripMultiplier: 0.9,
+    ballRestitutionMultiplier: 0.92,
+    windVector: [0.3, 0, 0.3],
+  },
+  notte: {
+    id: 'notte',
+    name: 'Notturna coi Lampioni',
+    description: 'Si gioca sotto i lampioni gialli finché non chiamano da casa',
+    skyColor: '#0f172a',
+    fogColor: '#0f172a',
+    fogDensity: 0.014,
+    sunColor: '#fbbf24',
+    sunIntensity: 1.4,
+    hemiSky: '#1e293b',
+    hemiGround: '#090d16',
+    playerGripMultiplier: 0.96,
+    ballRestitutionMultiplier: 0.98,
+    windVector: [0.4, 0, -0.3],
+  },
+};
+
+export interface PitchConfig {
+  id: PitchId;
+  name: string;
+  subtitle: string;
+  groundColor: string;
+  lineColor: string;
+  goalpostStyle: 'giubbotti' | 'pietre' | 'tubi';
+  wallRestitution: number;
+  groundFriction: number;
+}
+
+export const PITCH_CONFIGS: Record<PitchId, PitchConfig> = {
+  cortile: {
+    id: 'cortile',
+    name: 'Cortile Condominiale',
+    subtitle: 'Porte fatte coi giubbotti, muri di sponda, balcone della Signora Maria e finestra fragile',
+    groundColor: '#5c5852',
+    lineColor: '#e7e5e4',
+    goalpostStyle: 'giubbotti',
+    wallRestitution: 0.82,
+    groundFriction: 1.0,
+  },
+  strada: {
+    id: 'strada',
+    name: 'Strada di Periferia',
+    subtitle: 'Asfalto veloce, porte con due pietre, tombino e Panda parcheggiata con allarme',
+    groundColor: '#3f3f46',
+    lineColor: '#fde047',
+    goalpostStyle: 'pietre',
+    wallRestitution: 0.88,
+    groundFriction: 0.85,
+  },
+  terra: {
+    id: 'terra',
+    name: 'Campetto polveroso',
+    subtitle: 'Terra battuta che frena la palla, pali arrugginiti che suonano',
+    groundColor: '#9a6b44',
+    lineColor: '#f5f5f4',
+    goalpostStyle: 'tubi',
+    wallRestitution: 0.65,
+    groundFriction: 1.35,
+  },
+};
+
+export interface StreetRuleConfig {
+  id: StreetRuleId;
+  name: string;
+  description: string;
+}
+
+export const STREET_RULES: Record<StreetRuleId, StreetRuleConfig> = {
+  classica: {
+    id: 'classica',
+    name: 'Regola del Cortile (Tempo + Bonus)',
+    description: 'Partita a tempo: Tunnel e Cappelli danno +1 punto stile, chi fa più gol vince.',
+  },
+  chi_segna_vince: {
+    id: 'chi_segna_vince',
+    name: 'Chi Segna Vince (Ultimo Gol)',
+    description: 'Morte improvvisa: il primo che insacca tra i giubbotti chiude la sfida!',
+  },
+  tre_pali: {
+    id: 'tre_pali',
+    name: '3 Pali = 1 Gol',
+    description: 'Colpire i giubbotti o i pali conta: ogni 3 pali scatta automaticamente 1 Gol!',
+  },
+  palla_avvelenata: {
+    id: 'palla_avvelenata',
+    name: 'Tiri al Volo & Sponda Doppia',
+    description: 'Gol dopo rimbalzo sul muro del cortile ("sponda") vale DOPPIO (2 Gol)!',
+  },
+};
+
+export interface ActiveGagNotification {
+  id: GagId;
+  title: string;
+  subtitle: string;
+  timestamp: number;
+}
+
+export interface PlayerInputState {
+  moveX: number; // -1 to 1
+  moveZ: number; // -1 to 1
+  lookDeltaX: number;
+  lookDeltaY: number;
+  sprint: boolean;
+  shootHeld: boolean;
+  shootJustReleased: boolean;
+  shootCharge: number; // 0 to 1
+  passJustPressed: boolean;
+  lobJustPressed: boolean;
+  tackleJustPressed: boolean;
+  cameraToggleJustPressed: boolean;
+  ballCycleJustPressed: boolean;
+}
