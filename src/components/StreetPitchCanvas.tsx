@@ -105,6 +105,7 @@ export interface HudTelemetry {
   triangles: number;
   isSoftwareGl: boolean;
   physicsStepsLastFrame: number;
+  cameraFar: number;
 }
 
 interface StreetPitchCanvasProps {
@@ -134,6 +135,8 @@ interface StreetPitchCanvasProps {
 const _vec3A = new THREE.Vector3();
 const _camTargetPos = new THREE.Vector3();
 const _camLookAt = new THREE.Vector3();
+const _colorWhite = new THREE.Color(0xffffff);
+const _colorMudTarget = new THREE.Color(0x6b4423);
 
 function lerpAngle(a: number, b: number, t: number): number {
   let diff = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
@@ -428,6 +431,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
       prevRotZ: 0,
       spinY: 0, // Lateral curve spin
       currentRadius: 0.42,
+      mudBonusMass: 0, // Accumulated mud mass fraction in [0, 0.40] (+40% max)
       lastTouchTeam: 'blue' as 'blue' | 'red',
       bouncedOffWall: false,
       roofStuckTimer: 0,
@@ -477,6 +481,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
       ball.prevRotX = 0;
       ball.prevRotZ = 0;
       ball.spinY = 0;
+      ball.mudBonusMass = 0;
       ball.bouncedOffWall = false;
       ball.roofStuckTimer = 0;
 
@@ -609,6 +614,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         ball.vx = rng.range(-2, 2);
         ball.vy = 4;
         ball.vz = rng.range(-2, 2);
+        ball.mudBonusMass = 0;
       }
     };
 
@@ -621,7 +627,12 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
     let lastPhysicsSteps = 1;
     let frameId = 0;
     let lastRenderedBallProfile: BallProfileId = stateRef.current.ballProfile;
+    let lastWeather: WeatherId = stateRef.current.weather;
     let lastRenderedScale = stateRef.current.renderScale;
+    const initWeatherCfg = WEATHER_CONFIGS[stateRef.current.weather];
+    let currentCameraFar = initWeatherCfg.cameraFar;
+    let currentFogNear = initWeatherCfg.fogNear;
+    let currentFogFar = initWeatherCfg.fogFar;
     let telemetryAccumulator = 0;
     let networkBroadcastAccumulator = 0;
     let framesInWindow = 0;
@@ -694,6 +705,12 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         const nextProfile = order[(order.indexOf(st.ballProfile) + 1) % order.length];
         callbacksRef.current.onBallProfileChange(nextProfile);
       }
+
+      // Gradual interpolation of camera.far and fog near/far in fixed simulation steps
+      const targetWCfg = WEATHER_CONFIGS[st.weather];
+      currentCameraFar = THREE.MathUtils.damp(currentCameraFar, targetWCfg.cameraFar, 1.4, fixedDt);
+      currentFogNear = THREE.MathUtils.damp(currentFogNear, targetWCfg.fogNear, 1.4, fixedDt);
+      currentFogFar = THREE.MathUtils.damp(currentFogFar, targetWCfg.fogFar, 1.4, fixedDt);
 
       if (!st.isPlaying || st.isPaused) {
         return;
@@ -797,6 +814,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
       if (bucatoRevertTimer > 0) {
         bucatoRevertTimer -= fixedDt;
         if (bucatoRevertTimer <= 0 && st.ballProfile === 'bucato') {
+          ball.mudBonusMass = 0;
           callbacksRef.current.onBallProfileChange('supersantos');
           lastBanner = {
             title: 'PALLA NUOVA IN CAMPO!',
@@ -860,8 +878,10 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         activeBlueIdx = bestIdx;
       }
 
-      // Update Players (Controlled + AI)
+      // Update Players (Controlled + AI) using weather grip, speed & turn multipliers
       const grip = wCfg.playerGripMultiplier / Math.sqrt(pitchCfg.groundFriction);
+      const speedMult = wCfg.playerSpeedMultiplier;
+      const turnMult = wCfg.playerTurnMultiplier;
 
       players.forEach((p, idx) => {
         const isBlueControlled = idx === activeBlueIdx;
@@ -876,12 +896,12 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         let targetVz = 0;
 
         if (isBlueControlled && p1Input) {
-          const speed = (p1Input.sprint ? 8.6 : 6.2) * (p.slideTimer > 0 ? 1.25 : 1.0);
+          const speed = (p1Input.sprint ? 8.6 : 6.2) * speedMult * (p.slideTimer > 0 ? 1.25 : 1.0);
           if (st.cameraMode === 'fps') {
-            p.yaw -= p1Input.lookDeltaX;
+            p.yaw -= p1Input.lookDeltaX * turnMult;
             p.pitchLook = THREE.MathUtils.clamp(p.pitchLook - p1Input.lookDeltaY, -0.65, 0.45);
             if (!document.pointerLockElement && Math.abs(p1Input.moveX) > 0.1) {
-              p.yaw -= p1Input.moveX * 2.1 * fixedDt;
+              p.yaw -= p1Input.moveX * 2.1 * turnMult * fixedDt;
             }
             const forwardX = Math.sin(p.yaw);
             const forwardZ = Math.cos(p.yaw);
@@ -896,21 +916,23 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
             targetVx = p1Input.moveX * speed;
             targetVz = p1Input.moveZ * speed;
             if (Math.hypot(targetVx, targetVz) > 0.25) {
-              p.yaw = Math.atan2(targetVx, targetVz);
+              const desiredYaw = Math.atan2(targetVx, targetVz);
+              p.yaw = lerpAngle(p.yaw, desiredYaw, Math.min(1, 14 * turnMult * fixedDt));
             }
           }
 
           if (p1Input.tackleJustPressed && p.slideTimer <= 0) {
             p.slideTimer = 0.42;
-            p.vx += Math.sin(p.yaw) * 6.5;
-            p.vz += Math.cos(p.yaw) * 6.5;
+            p.vx += Math.sin(p.yaw) * 6.5 * speedMult;
+            p.vz += Math.cos(p.yaw) * 6.5 * speedMult;
           }
         } else if (isRedControlled && p2Input) {
-          const speed = p2Input.sprint ? 8.6 : 6.2;
+          const speed = (p2Input.sprint ? 8.6 : 6.2) * speedMult;
           targetVx = p2Input.moveX * speed;
           targetVz = p2Input.moveZ * speed;
           if (Math.hypot(targetVx, targetVz) > 0.25) {
-            p.yaw = Math.atan2(targetVx, targetVz);
+            const desiredYaw = Math.atan2(targetVx, targetVz);
+            p.yaw = lerpAngle(p.yaw, desiredYaw, Math.min(1, 14 * turnMult * fixedDt));
           }
         } else {
           // Street Football Tactical AI
@@ -931,15 +953,16 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
           const dz = destZ - p.z;
           const dLen = Math.hypot(dx, dz);
           if (dLen > 0.35) {
-            const aiSpeed = p.role === 'attacker' ? 5.6 : 5.1;
+            const aiSpeed = (p.role === 'attacker' ? 5.6 : 5.1) * speedMult;
             targetVx = (dx / dLen) * aiSpeed;
             targetVz = (dz / dLen) * aiSpeed;
-            p.yaw = Math.atan2(targetVx, targetVz);
+            const desiredYaw = Math.atan2(targetVx, targetVz);
+            p.yaw = lerpAngle(p.yaw, desiredYaw, Math.min(1, 12 * turnMult * fixedDt));
           }
         }
 
-        // Smooth velocity damping with weather grip
-        const accel = 11.5 * grip;
+        // Smooth velocity damping with weather grip & turn multiplier
+        const accel = 11.5 * grip * turnMult;
         p.vx = THREE.MathUtils.damp(p.vx, targetVx, accel, fixedDt);
         p.vz = THREE.MathUtils.damp(p.vz, targetVz, accel, fixedDt);
 
@@ -950,7 +973,8 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         const dBall = Math.hypot(ball.x - p.x, ball.z - p.z);
         if (dBall < 1.25 && ball.y < 1.75 && ball.roofStuckTimer <= 0) {
           const prof = BALL_PROFILES[st.ballProfile];
-          const massFactor = 0.43 / prof.mass;
+          const effectiveMass = prof.mass * (1 + ball.mudBonusMass);
+          const massFactor = 0.43 / effectiveMass;
           ball.lastTouchTeam = p.team;
 
           const kickDirX = Math.sin(p.yaw);
@@ -1072,6 +1096,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
           ball.vx = rng.range(-1.5, 1.5);
           ball.vy = 2;
           ball.vz = 5.5;
+          ball.mudBonusMass = 0;
         }
       } else {
         // Deflation logic for 'bucato' in simulated time
@@ -1085,18 +1110,27 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         const speedXZ = Math.hypot(ball.vx, ball.vz);
         const totalSpeed = Math.hypot(ball.vx, ball.vy, ball.vz);
 
+        // Mud accumulation in simulated time while rolling or bouncing on the ground
+        if (wCfg.mudAccumulationRate > 0 && ball.y <= ball.currentRadius + 0.04 && (speedXZ > 0.15 || Math.abs(ball.vy) > 0.3)) {
+          ball.mudBonusMass = Math.min(
+            wCfg.mudMaxMassBonus,
+            ball.mudBonusMass + wCfg.mudAccumulationRate * fixedDt,
+          );
+        }
+
         // 1. Gravity
         ball.vy -= 17.5 * fixedDt;
 
-        // 2. Wind Vector * Ball Wind Factor
-        ball.vx += wCfg.windVector[0] * bProf.windFactor * 0.25 * fixedDt;
-        ball.vz += wCfg.windVector[2] * bProf.windFactor * 0.25 * fixedDt;
+        // 2. Wind Vector * Ball Wind Factor (scaled inversely by mud mass bonus)
+        const mudInvMass = 1 / (1 + ball.mudBonusMass);
+        ball.vx += wCfg.windVector[0] * bProf.windFactor * 0.25 * mudInvMass * fixedDt;
+        ball.vz += wCfg.windVector[2] * bProf.windFactor * 0.25 * mudInvMass * fixedDt;
 
         // 3. Magnus Effect (Lateral Spin Curve)
         if (speedXZ > 1.5 && Math.abs(ball.spinY) > 0.05) {
           const perpX = -ball.vz / speedXZ;
           const perpZ = ball.vx / speedXZ;
-          const magnusForce = ball.spinY * bProf.magnus * 1.4;
+          const magnusForce = ball.spinY * bProf.magnus * 1.4 * mudInvMass;
           ball.vx += perpX * magnusForce * fixedDt;
           ball.vz += perpZ * magnusForce * fixedDt;
           ball.spinY *= Math.pow(0.45, fixedDt);
@@ -1108,17 +1142,24 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
           const perpZ = ball.vx / (speedXZ || 1);
           const wobbleOsc =
             Math.sin(simTime * bProf.wobble.freqHz * Math.PI * 2) + rng.range(-0.18, 0.18);
-          ball.vx += perpX * wobbleOsc * bProf.wobble.force * fixedDt;
-          ball.vz += perpZ * wobbleOsc * bProf.wobble.force * fixedDt;
+          ball.vx += perpX * wobbleOsc * bProf.wobble.force * mudInvMass * fixedDt;
+          ball.vz += perpZ * wobbleOsc * bProf.wobble.force * mudInvMass * fixedDt;
         }
 
-        // 5. Air & Ground Rolling Drag
+        // 5. Air & Ground Rolling Drag (with weather rollFrictionMultiplier & mud drag)
         const drag = Math.pow(1 - bProf.linearDrag, fixedDt * 60);
         ball.vx *= drag;
         ball.vz *= drag;
 
         if (ball.y <= ball.currentRadius + 0.03) {
-          const rollDrag = Math.pow(1 - bProf.rollFriction * pitchCfg.groundFriction, fixedDt * 60);
+          const effectiveRollFriction = Math.min(
+            0.95,
+            bProf.rollFriction *
+              pitchCfg.groundFriction *
+              wCfg.ballRollFrictionMultiplier *
+              (1 + ball.mudBonusMass * 0.6),
+          );
+          const rollDrag = Math.pow(1 - effectiveRollFriction, fixedDt * 60);
           ball.vx *= rollDrag;
           ball.vz *= rollDrag;
         }
@@ -1130,13 +1171,23 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         ball.rotX += ball.vz * fixedDt * 2.1;
         ball.rotZ -= ball.vx * fixedDt * 2.1;
 
-        // Ground Bounce (with deterministic irregular deflection when punctured)
+        // Ground Bounce (with muffled mud audio & deterministic irregular deflection when punctured)
         if (ball.y < ball.currentRadius) {
           const impactSpeed = Math.abs(ball.vy);
           ball.y = ball.currentRadius;
           if (impactSpeed > 1.4) {
-            soundEngine.playBounce(st.ballProfile, impactSpeed);
-            ball.vy = impactSpeed * bProf.restitution * wCfg.ballRestitutionMultiplier;
+            if (wCfg.mudAccumulationRate > 0) {
+              ball.mudBonusMass = Math.min(
+                wCfg.mudMaxMassBonus,
+                ball.mudBonusMass + wCfg.mudAccumulationRate * 3 * fixedDt,
+              );
+            }
+            soundEngine.playBounce(st.ballProfile, impactSpeed, st.weather === 'fango');
+            ball.vy =
+              impactSpeed *
+              bProf.restitution *
+              wCfg.ballRestitutionMultiplier *
+              (1 / (1 + ball.mudBonusMass * 0.35));
             if (st.ballProfile === 'bucato') {
               ball.vx += rng.range(-1.1, 1.1);
               ball.vz += rng.range(-1.1, 1.1);
@@ -1336,21 +1387,29 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         triggerCourtyardGag(req.gag);
       }
 
-      // Weather lighting & atmosphere update
+      // Reset mud accumulation when weather changes
+      if (st.weather !== lastWeather) {
+        lastWeather = st.weather;
+        ball.mudBonusMass = 0;
+      }
+
+      // Weather lighting, ground tint & linear Fog (with short near and interpolated far for Nebbia culling)
       const wCfg = WEATHER_CONFIGS[st.weather];
       scene.background = _vec3A.set(0, 0, 0) && new THREE.Color(wCfg.skyColor);
-      if (!scene.fog || !(scene.fog instanceof THREE.FogExp2)) {
-        scene.fog = new THREE.FogExp2(wCfg.fogColor, wCfg.fogDensity);
+      if (!scene.fog || !(scene.fog instanceof THREE.Fog)) {
+        scene.fog = new THREE.Fog(wCfg.fogColor, currentFogNear, currentFogFar);
       } else {
         scene.fog.color.set(wCfg.fogColor);
-        scene.fog.density = wCfg.fogDensity;
+        scene.fog.near = currentFogNear;
+        scene.fog.far = currentFogFar;
       }
       sunLight.color.set(wCfg.sunColor);
       sunLight.intensity = wCfg.sunIntensity;
       hemiLight.color.set(wCfg.hemiSky);
       hemiLight.groundColor.set(wCfg.hemiGround);
+      envRefs.groundMat.color.set(wCfg.groundTint);
 
-      // Purely visual weather particles update
+      // Purely visual weather particles update (no heavy particles in Fango)
       weatherParticles.visible = st.weather === 'pioggia' || st.weather === 'vento';
       if (weatherParticles.visible) {
         const posAttr = particleGeo.getAttribute('position') as THREE.BufferAttribute;
@@ -1370,12 +1429,22 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         posAttr.needsUpdate = true;
       }
 
-      // Ball Texture & Squash/Deflate visual update
+      // Ball Texture & Squash/Deflate visual update + Mud reset on profile change
       if (st.ballProfile !== lastRenderedBallProfile) {
         lastRenderedBallProfile = st.ballProfile;
         ballMat.map = ballTextures[st.ballProfile];
         ballMat.needsUpdate = true;
         ball.currentRadius = BALL_PROFILES[st.ballProfile].visualRadius;
+        ball.mudBonusMass = 0;
+      }
+
+      // Visual brown tint on the ball proportional to accumulated mud
+      if (wCfg.mudMaxMassBonus > 0) {
+        _colorMudTarget.set(wCfg.ballMudTint);
+        const mudVisualRatio = Math.min(1, 0.28 + (ball.mudBonusMass / wCfg.mudMaxMassBonus) * 0.72);
+        ballMat.color.copy(_colorWhite).lerp(_colorMudTarget, mudVisualRatio);
+      } else {
+        ballMat.color.copy(_colorWhite);
       }
 
       // Requirement 3: Fixed Timestep Accumulator with max 4 steps per frame
@@ -1459,6 +1528,13 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
       const activeRenderZ = THREE.MathUtils.lerp(activePlayer.prevZ, activePlayer.z, alpha);
       const activeRenderYaw = lerpAngle(activePlayer.prevYaw, activePlayer.yaw, alpha);
 
+      // Apply interpolated camera.far across all camera modes (TV, FPS, Title) for Nebbia frustum culling
+      let projNeedsUpdate = false;
+      if (Math.abs(camera.far - currentCameraFar) > 0.05) {
+        camera.far = currentCameraFar;
+        projNeedsUpdate = true;
+      }
+
       if (!st.isPlaying) {
         const orbitAngle = now * 0.00022;
         camera.position.set(Math.sin(orbitAngle) * 18, 9.5, Math.cos(orbitAngle) * 18);
@@ -1480,7 +1556,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
 
         const targetFov = speed > 6.5 ? 76 : 68;
         camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 8, frameDt);
-        camera.updateProjectionMatrix();
+        projNeedsUpdate = true;
       } else {
         const focusX = THREE.MathUtils.clamp(renderBallX * 0.65 + activeRenderX * 0.35, -9.5, 9.5);
         const focusZ = THREE.MathUtils.clamp(renderBallZ * 0.5, -4.5, 4.5);
@@ -1495,8 +1571,12 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
 
         if (Math.abs(camera.fov - 52) > 0.2) {
           camera.fov = THREE.MathUtils.damp(camera.fov, 52, 8, frameDt);
-          camera.updateProjectionMatrix();
+          projNeedsUpdate = true;
         }
+      }
+
+      if (projNeedsUpdate) {
+        camera.updateProjectionMatrix();
       }
 
       const renderStart = performance.now();
@@ -1536,6 +1616,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
           triangles: renderer.info.render.triangles,
           isSoftwareGl,
           physicsStepsLastFrame: lastPhysicsSteps,
+          cameraFar: Number(camera.far.toFixed(1)),
         });
       }
 

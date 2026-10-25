@@ -297,6 +297,7 @@ export function createStreetPlayerModel(
 
 export interface CourtyardEnvironmentRefs {
   group: THREE.Group;
+  groundMat: THREE.MeshStandardMaterial;
   windowGlassMesh: THREE.Mesh;
   shardsGroup: THREE.Group;
   carGroup: THREE.Group;
@@ -549,6 +550,7 @@ export function buildCourtyardEnvironment(
 
   return {
     group,
+    groundMat,
     windowGlassMesh,
     shardsGroup,
     carGroup,

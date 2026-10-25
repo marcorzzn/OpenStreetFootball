@@ -1,6 +1,6 @@
 export type BallProfileId = 'supersantos' | 'classico' | 'bagnato' | 'bucato';
 
-export type WeatherId = 'tramonto' | 'sole' | 'pioggia' | 'vento' | 'nebbia' | 'notte';
+export type WeatherId = 'tramonto' | 'sole' | 'pioggia' | 'vento' | 'nebbia' | 'notte' | 'fango';
 
 export type PitchId = 'cortile' | 'strada' | 'terra';
 
@@ -120,12 +120,22 @@ export interface WeatherConfig {
   skyColor: string;
   fogColor: string;
   fogDensity: number;
+  fogNear: number;
+  fogFar: number;
+  cameraFar: number;
   sunColor: string;
   sunIntensity: number;
   hemiSky: string;
   hemiGround: string;
   playerGripMultiplier: number;
+  playerSpeedMultiplier: number;
+  playerTurnMultiplier: number;
   ballRestitutionMultiplier: number;
+  ballRollFrictionMultiplier: number;
+  mudAccumulationRate: number;
+  mudMaxMassBonus: number;
+  groundTint: string;
+  ballMudTint: string;
   windVector: [number, number, number];
 }
 
@@ -137,12 +147,22 @@ export const WEATHER_CONFIGS: Record<WeatherId, WeatherConfig> = {
     skyColor: '#e07a5f',
     fogColor: '#e07a5f',
     fogDensity: 0.008,
+    fogNear: 28,
+    fogFar: 135,
+    cameraFar: 140,
     sunColor: '#ffb703',
     sunIntensity: 2.2,
     hemiSky: '#f4a261',
     hemiGround: '#3d405b',
     playerGripMultiplier: 1.0,
+    playerSpeedMultiplier: 1.0,
+    playerTurnMultiplier: 1.0,
     ballRestitutionMultiplier: 1.0,
+    ballRollFrictionMultiplier: 1.0,
+    mudAccumulationRate: 0,
+    mudMaxMassBonus: 0,
+    groundTint: '#ffffff',
+    ballMudTint: '#ffffff',
     windVector: [0.6, 0, 0.2],
   },
   sole: {
@@ -152,12 +172,22 @@ export const WEATHER_CONFIGS: Record<WeatherId, WeatherConfig> = {
     skyColor: '#60a5fa',
     fogColor: '#93c5fd',
     fogDensity: 0.005,
+    fogNear: 30,
+    fogFar: 138,
+    cameraFar: 140,
     sunColor: '#fffbeb',
     sunIntensity: 2.4,
     hemiSky: '#bae6fd',
     hemiGround: '#57534e',
     playerGripMultiplier: 1.0,
+    playerSpeedMultiplier: 1.0,
+    playerTurnMultiplier: 1.0,
     ballRestitutionMultiplier: 1.05,
+    ballRollFrictionMultiplier: 1.0,
+    mudAccumulationRate: 0,
+    mudMaxMassBonus: 0,
+    groundTint: '#ffffff',
+    ballMudTint: '#ffffff',
     windVector: [0.2, 0, -0.1],
   },
   pioggia: {
@@ -167,12 +197,22 @@ export const WEATHER_CONFIGS: Record<WeatherId, WeatherConfig> = {
     skyColor: '#334155',
     fogColor: '#475569',
     fogDensity: 0.015,
+    fogNear: 24,
+    fogFar: 120,
+    cameraFar: 140,
     sunColor: '#94a3b8',
     sunIntensity: 1.1,
     hemiSky: '#64748b',
     hemiGround: '#1e293b',
     playerGripMultiplier: 0.72,
+    playerSpeedMultiplier: 1.0,
+    playerTurnMultiplier: 1.0,
     ballRestitutionMultiplier: 0.8,
+    ballRollFrictionMultiplier: 1.0,
+    mudAccumulationRate: 0,
+    mudMaxMassBonus: 0,
+    groundTint: '#ffffff',
+    ballMudTint: '#ffffff',
     windVector: [1.8, 0, 0.9],
   },
   vento: {
@@ -182,12 +222,22 @@ export const WEATHER_CONFIGS: Record<WeatherId, WeatherConfig> = {
     skyColor: '#38bdf8',
     fogColor: '#7dd3fc',
     fogDensity: 0.007,
+    fogNear: 28,
+    fogFar: 135,
+    cameraFar: 140,
     sunColor: '#fef08a',
     sunIntensity: 2.0,
     hemiSky: '#7dd3fc',
     hemiGround: '#44403c',
     playerGripMultiplier: 0.95,
+    playerSpeedMultiplier: 1.0,
+    playerTurnMultiplier: 1.0,
     ballRestitutionMultiplier: 1.0,
+    ballRollFrictionMultiplier: 1.0,
+    mudAccumulationRate: 0,
+    mudMaxMassBonus: 0,
+    groundTint: '#ffffff',
+    ballMudTint: '#ffffff',
     windVector: [5.5, 0.3, -2.8],
   },
   nebbia: {
@@ -197,12 +247,22 @@ export const WEATHER_CONFIGS: Record<WeatherId, WeatherConfig> = {
     skyColor: '#cbd5e1',
     fogColor: '#cbd5e1',
     fogDensity: 0.036,
+    fogNear: 18,
+    fogFar: 44,
+    cameraFar: 45,
     sunColor: '#f1f5f9',
     sunIntensity: 1.2,
     hemiSky: '#e2e8f0',
     hemiGround: '#64748b',
     playerGripMultiplier: 0.9,
+    playerSpeedMultiplier: 1.0,
+    playerTurnMultiplier: 1.0,
     ballRestitutionMultiplier: 0.92,
+    ballRollFrictionMultiplier: 1.0,
+    mudAccumulationRate: 0,
+    mudMaxMassBonus: 0,
+    groundTint: '#ffffff',
+    ballMudTint: '#ffffff',
     windVector: [0.3, 0, 0.3],
   },
   notte: {
@@ -212,13 +272,48 @@ export const WEATHER_CONFIGS: Record<WeatherId, WeatherConfig> = {
     skyColor: '#0f172a',
     fogColor: '#0f172a',
     fogDensity: 0.014,
+    fogNear: 26,
+    fogFar: 125,
+    cameraFar: 140,
     sunColor: '#fbbf24',
     sunIntensity: 1.4,
     hemiSky: '#1e293b',
     hemiGround: '#090d16',
     playerGripMultiplier: 0.96,
+    playerSpeedMultiplier: 1.0,
+    playerTurnMultiplier: 1.0,
     ballRestitutionMultiplier: 0.98,
+    ballRollFrictionMultiplier: 1.0,
+    mudAccumulationRate: 0,
+    mudMaxMassBonus: 0,
+    groundTint: '#ffffff',
+    ballMudTint: '#ffffff',
     windVector: [0.4, 0, -0.3],
+  },
+  fango: {
+    id: 'fango',
+    name: 'Cortile Infangato',
+    description: 'Terreno marrone pesante post-temporale: rimbalzo -35%, attrito x2 e palla che accumula fango (+40% massa)',
+    skyColor: '#78716c',
+    fogColor: '#78716c',
+    fogDensity: 0.012,
+    fogNear: 25,
+    fogFar: 120,
+    cameraFar: 140,
+    sunColor: '#d6d3d1',
+    sunIntensity: 1.35,
+    hemiSky: '#a8a29e',
+    hemiGround: '#451a03',
+    playerGripMultiplier: 0.85,
+    playerSpeedMultiplier: 0.85,
+    playerTurnMultiplier: 0.72,
+    ballRestitutionMultiplier: 0.65,
+    ballRollFrictionMultiplier: 2.0,
+    mudAccumulationRate: 0.025,
+    mudMaxMassBonus: 0.4,
+    groundTint: '#8c6239',
+    ballMudTint: '#6b4423',
+    windVector: [0.5, 0, 0.2],
   },
 };
 

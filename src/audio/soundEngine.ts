@@ -63,9 +63,36 @@ class SoundEngine {
     osc.stop(now + 0.2);
   }
 
-  public playBounce(profile: BallProfileId, speed: number) {
+  public playBounce(profile: BallProfileId, speed: number, isMuddy: boolean = false) {
     const intensity = Math.min(1, speed / 14);
     if (intensity < 0.08) return;
+    if (isMuddy) {
+      const ctx = this.ensureContext();
+      if (!ctx) return;
+      const now = ctx.currentTime;
+      const power = intensity * 0.45;
+      const osc = ctx.createOscillator();
+      const filter = ctx.createBiquadFilter();
+      const gain = ctx.createGain();
+
+      // Riusa il tonfo del pallone bagnato filtrato con un lowpass scuro per il fango
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(88, now);
+      osc.frequency.exponentialRampToValueAtTime(28, now + 0.16);
+
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(135, now);
+
+      gain.gain.setValueAtTime(0.48 * Math.max(0.4, power), now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.17);
+
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.19);
+      return;
+    }
     this.playKick(profile, intensity * 0.45);
   }
 

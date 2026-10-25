@@ -108,6 +108,7 @@ export default function App() {
     triangles: 4800,
     isSoftwareGl: false,
     physicsStepsLastFrame: 1,
+    cameraFar: 140,
   });
 
   const inputManagerRef = useRef<InputManager | null>(null);
@@ -334,6 +335,13 @@ export default function App() {
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
+  const handleWeatherChange = (nextWeather: WeatherId) => {
+    setWeather(nextWeather);
+    // TODO (Fase F): Se in multiplayer (gameMode === 'online_lan') e isOnlineHost è true,
+    // inviare qui il messaggio WebSocket (es. room_config / world_state) per sincronizzare
+    // il cambio di meteo con tutti i client connessi nella stanza.
+  };
+
   const currentBall = BALL_PROFILES[ballProfile];
   const currentWeather = WEATHER_CONFIGS[weather];
   const currentPitch = PITCH_CONFIGS[pitch];
@@ -364,23 +372,34 @@ export default function App() {
         onTelemetryUpdate={setTelemetry}
       />
 
-      {/* In-Game Performance Monitor Badge (stats-gl style: FPS, Frame ms, Physics Steps, Draw Calls, Triangles, Render Scale) */}
+      {/* In-Game Performance Monitor Badge (stats-gl style: FPS, Frame ms, Physics Steps, Draw Calls, Triangles, Render Scale + Weather & camera.far) */}
       {showPerfMonitor && (
-        <div className="fixed top-3 left-3 z-20 px-3 py-1.5 bg-stone-950/92 border border-stone-700/80 rounded-lg font-mono-num text-[11px] text-stone-300 flex items-center gap-2.5 pointer-events-auto">
-          <Activity className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-          <span className={telemetry.fps >= 50 ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
-            {telemetry.fps} FPS
-          </span>
-          <span>·</span>
-          <span>{telemetry.frameTimeMs} ms</span>
-          <span>·</span>
-          <span className="text-sky-300">Phys: {telemetry.physicsStepsLastFrame} step/f</span>
-          <span className="hidden sm:inline">·</span>
-          <span className="hidden sm:inline">{telemetry.drawCalls} draw</span>
-          <span className="hidden md:inline">·</span>
-          <span className="hidden md:inline">{(telemetry.triangles / 1000).toFixed(1)}k tri</span>
-          <span>·</span>
-          <span className="text-amber-300">Scale {Math.round(renderScale * 100)}%</span>
+        <div className="fixed top-3 left-3 z-20 px-3 py-1.5 bg-stone-950/92 border border-stone-700/80 rounded-lg font-mono-num text-[11px] text-stone-300 flex flex-col gap-0.5 pointer-events-auto">
+          <div className="flex items-center gap-2.5">
+            <Activity className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span className={telemetry.fps >= 50 ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
+              {telemetry.fps} FPS
+            </span>
+            <span>·</span>
+            <span>{telemetry.frameTimeMs} ms</span>
+            <span>·</span>
+            <span className="text-sky-300">Phys: {telemetry.physicsStepsLastFrame} step/f</span>
+            <span className="hidden sm:inline">·</span>
+            <span className="hidden sm:inline">{telemetry.drawCalls} draw</span>
+            <span className="hidden md:inline">·</span>
+            <span className="hidden md:inline">{(telemetry.triangles / 1000).toFixed(1)}k tri</span>
+            <span>·</span>
+            <span className="text-amber-300">Scale {Math.round(renderScale * 100)}%</span>
+          </div>
+          <div className="flex items-center gap-2 text-[10px] text-stone-400 pl-6">
+            <span>
+              Meteo: <strong className="text-stone-200">{currentWeather.name}</strong> ({weather})
+            </span>
+            <span>·</span>
+            <span>
+              camera.far: <strong className="text-emerald-300">{telemetry.cameraFar}m</strong>
+            </span>
+          </div>
         </div>
       )}
 
@@ -972,7 +991,7 @@ export default function App() {
                     </label>
                     <select
                       value={weather}
-                      onChange={(e) => setWeather(e.target.value as WeatherId)}
+                      onChange={(e) => handleWeatherChange(e.target.value as WeatherId)}
                       className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded px-2.5 py-1.5 border border-stone-700"
                     >
                       {Object.values(WEATHER_CONFIGS).map((w) => (
