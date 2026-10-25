@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Activity,
   Camera,
+  Check,
   ChevronDown,
   ChevronUp,
   CloudRain,
   Compass,
+  Copy,
   Gamepad2,
   Globe,
   Keyboard,
@@ -12,6 +15,7 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Share2,
   Smartphone,
   Sparkles,
   Volume2,
@@ -54,6 +58,8 @@ export default function App() {
   const [pitch, setPitch] = useState<PitchId>('cortile');
   const [streetRule, setStreetRule] = useState<StreetRuleId>('classica');
   const [renderScale, setRenderScale] = useState<number>(1.0);
+  const [autoRenderScale, setAutoRenderScale] = useState<boolean>(false);
+  const [showPerfMonitor, setShowPerfMonitor] = useState<boolean>(true);
   const [gagsEnabled, setGagsEnabled] = useState<boolean>(true);
   const [muted, setMuted] = useState<boolean>(false);
   const [dockCollapsed, setDockCollapsed] = useState<boolean>(false);
@@ -61,6 +67,8 @@ export default function App() {
   const [showTouchControls, setShowTouchControls] = useState<boolean>(false);
   const [showNetworkModal, setShowNetworkModal] = useState<boolean>(false);
   const [showControlsModal, setShowControlsModal] = useState<boolean>(false);
+  const [showReleaseModal, setShowReleaseModal] = useState<boolean>(false);
+  const [copiedPitchId, setCopiedPitchId] = useState<string | null>(null);
 
   const [triggerGagRequest, setTriggerGagRequest] = useState<{ gag: GagId; seq: number } | null>(null);
   const [resetMatchSeq, setResetMatchSeq] = useState<number>(0);
@@ -92,17 +100,22 @@ export default function App() {
     activeGag: null,
     lastBanner: null,
     pointerLocked: false,
+    fps: 60,
+    frameTimeMs: 3.8,
+    drawCalls: 42,
+    triangles: 4800,
+    isSoftwareGl: false,
   });
 
   const inputManagerRef = useRef<InputManager | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const joystickTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const [joystickKnob, setJoystickKnob] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const lowFpsStrikeRef = useRef<number>(0);
 
   useEffect(() => {
     const mgr = new InputManager();
     inputManagerRef.current = mgr;
-    // Auto-enable touch overlay on touch-primary devices (Android / mobile)
     if (typeof window !== 'undefined' && 'ontouchstart' in window && window.innerWidth < 1024) {
       setShowTouchControls(true);
     }
@@ -111,7 +124,21 @@ export default function App() {
     };
   }, []);
 
-  // Keyboard shortcuts for Pause (Esc), Dock Collapse (H), and Start Match (Enter/Space on Title Screen)
+  // Auto-Scale Render Resolution Guard for Weak GPUs
+  useEffect(() => {
+    if (!autoRenderScale || !isPlaying || isPaused) return;
+    if (telemetry.fps < 42 && !telemetry.isSoftwareGl) {
+      lowFpsStrikeRef.current += 1;
+      if (lowFpsStrikeRef.current >= 4) {
+        lowFpsStrikeRef.current = 0;
+        setRenderScale((prev) => (prev > 0.75 ? 0.75 : prev > 0.5 ? 0.5 : prev));
+      }
+    } else {
+      lowFpsStrikeRef.current = 0;
+    }
+  }, [autoRenderScale, isPlaying, isPaused, telemetry.fps, telemetry.isSoftwareGl]);
+
+  // Keyboard shortcuts for Pause (Esc), Dock Collapse (H), Perf Monitor (F3), and Start Match (Enter/Space)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (
@@ -121,7 +148,13 @@ export default function App() {
       ) {
         return;
       }
-      if (!isPlaying && (e.code === 'Enter' || e.code === 'Space') && !showNetworkModal && !showControlsModal) {
+      if (
+        !isPlaying &&
+        (e.code === 'Enter' || e.code === 'Space') &&
+        !showNetworkModal &&
+        !showControlsModal &&
+        !showReleaseModal
+      ) {
         e.preventDefault();
         soundEngine.playWhistle(false);
         setIsPlaying(true);
@@ -130,13 +163,15 @@ export default function App() {
         setIsPaused((prev) => !prev);
       } else if (e.code === 'KeyH') {
         setDockCollapsed((prev) => !prev);
+      } else if (e.code === 'F3') {
+        e.preventDefault();
+        setShowPerfMonitor((prev) => !prev);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isPlaying, showNetworkModal, showControlsModal]);
+  }, [isPlaying, showNetworkModal, showControlsModal, showReleaseModal]);
 
-  // Fetch LAN IP info and connect WebSocket for Online/LAN Multiplayer
   const refreshNetworkInfo = useCallback(async () => {
     try {
       const res = await fetch('/api/network-info');
@@ -146,69 +181,86 @@ export default function App() {
         setAvailableRooms(data.rooms || []);
       }
     } catch {
-      // Ignore offline fetch
+      // Ignore on static hosts like GitHub Pages / Itch.io
     }
   }, []);
 
   useEffect(() => {
     refreshNetworkInfo();
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${proto}//${window.location.host}/ws`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    try {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${proto}//${window.location.host}/ws`;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
 
-    ws.onopen = () => {
-      setWsConnected(true);
-      ws.send(JSON.stringify({ type: 'list_rooms' }));
-    };
+      ws.onopen = () => {
+        setWsConnected(true);
+        ws.send(JSON.stringify({ type: 'list_rooms' }));
+      };
 
-    ws.onclose = () => {
-      setWsConnected(false);
-    };
+      ws.onclose = () => {
+        setWsConnected(false);
+      };
 
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === 'room_joined' || msg.type === 'room_updated') {
-          const room = msg.room;
-          setOnlineRoomCode(room.code);
-          const myId = msg.playerId;
-          if (myId) {
-            setIsOnlineHost(room.hostId === myId);
+      ws.onerror = () => {
+        setWsConnected(false);
+      };
+
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'room_joined' || msg.type === 'room_updated') {
+            const room = msg.room;
+            setOnlineRoomCode(room.code);
+            const myId = msg.playerId;
+            if (myId) {
+              setIsOnlineHost(room.hostId === myId);
+            }
+            if (room.pitch) setPitch(room.pitch as PitchId);
+            if (room.ballProfile) setBallProfile(room.ballProfile as BallProfileId);
+            if (room.weather) setWeather(room.weather as WeatherId);
+            if (room.rule) setStreetRule(room.rule as StreetRuleId);
+            setGameMode('online_lan');
+            setNetworkError(null);
+          } else if (msg.type === 'rooms_list') {
+            setAvailableRooms(
+              (msg.rooms || []).map(
+                (r: {
+                  code: string;
+                  name: string;
+                  players?: unknown[];
+                  pitch: string;
+                  ballProfile: string;
+                  weather: string;
+                }) => ({
+                  code: r.code,
+                  name: r.name,
+                  playerCount: Array.isArray(r.players) ? r.players.length : 1,
+                  pitch: r.pitch,
+                  ballProfile: r.ballProfile,
+                  weather: r.weather,
+                }),
+              ),
+            );
+          } else if (msg.type === 'error') {
+            setNetworkError(msg.message);
           }
-          if (room.pitch) setPitch(room.pitch as PitchId);
-          if (room.ballProfile) setBallProfile(room.ballProfile as BallProfileId);
-          if (room.weather) setWeather(room.weather as WeatherId);
-          if (room.rule) setStreetRule(room.rule as StreetRuleId);
-          setGameMode('online_lan');
-          setNetworkError(null);
-        } else if (msg.type === 'rooms_list') {
-          setAvailableRooms(
-            (msg.rooms || []).map((r: { code: string; name: string; players?: unknown[]; pitch: string; ballProfile: string; weather: string }) => ({
-              code: r.code,
-              name: r.name,
-              playerCount: Array.isArray(r.players) ? r.players.length : 1,
-              pitch: r.pitch,
-              ballProfile: r.ballProfile,
-              weather: r.weather,
-            })),
-          );
-        } else if (msg.type === 'error') {
-          setNetworkError(msg.message);
+        } catch {
+          // Ignore non-JSON
         }
-      } catch {
-        // Ignore non-JSON
-      }
-    };
+      };
 
-    return () => {
-      ws.close();
-    };
+      return () => {
+        ws.close();
+      };
+    } catch {
+      return undefined;
+    }
   }, [refreshNetworkInfo]);
 
   const handleCreateOnlineRoom = () => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      setNetworkError('Connessione WebSocket non attiva.');
+      setNetworkError('Server WebSocket non rilevato (avvia con npm run dev in locale per la LAN).');
       return;
     }
     wsRef.current.send(
@@ -227,7 +279,7 @@ export default function App() {
     const targetCode = (codeToJoin || joinCodeInput).toUpperCase().trim();
     if (!targetCode) return;
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      setNetworkError('Connessione WebSocket non attiva.');
+      setNetworkError('Server WebSocket non rilevato.');
       return;
     }
     wsRef.current.send(
@@ -243,6 +295,12 @@ export default function App() {
     const next = !muted;
     setMuted(next);
     soundEngine.muted = next;
+  };
+
+  const copyCommunityPitch = (id: string, text: string) => {
+    navigator.clipboard?.writeText(text);
+    setCopiedPitchId(id);
+    setTimeout(() => setCopiedPitchId(null), 2200);
   };
 
   const formatClock = (seconds: number) => {
@@ -280,21 +338,47 @@ export default function App() {
         onTelemetryUpdate={setTelemetry}
       />
 
+      {/* In-Game Performance Monitor Badge (stats-gl style: FPS, Frame ms, Draw Calls, Triangles, Render Scale) */}
+      {showPerfMonitor && (
+        <div className="fixed top-3 left-3 z-20 px-3 py-1.5 bg-stone-950/92 border border-stone-700/80 rounded-lg font-mono-num text-[11px] text-stone-300 flex items-center gap-2.5 pointer-events-auto">
+          <Activity className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          <span className={telemetry.fps >= 50 ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'}>
+            {telemetry.fps} FPS
+          </span>
+          <span>·</span>
+          <span>{telemetry.frameTimeMs} ms</span>
+          <span className="hidden sm:inline">·</span>
+          <span className="hidden sm:inline">{telemetry.drawCalls} draw</span>
+          <span className="hidden md:inline">·</span>
+          <span className="hidden md:inline">{(telemetry.triangles / 1000).toFixed(1)}k tri</span>
+          <span>·</span>
+          <span className="text-amber-300">Scale {Math.round(renderScale * 100)}%</span>
+        </div>
+      )}
+
       {/* 2. TITLE SCREEN OVERLAY (When not playing) */}
       {!isPlaying && (
         <div className="fixed inset-0 z-20 flex flex-col justify-between p-6 md:p-10 pointer-events-none bg-gradient-to-t from-stone-950/90 via-stone-950/35 to-stone-950/75">
           {/* Top Bar */}
-          <div className="flex items-center justify-between gap-6 pointer-events-auto">
-            <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between gap-6 pointer-events-auto mt-7 sm:mt-0">
+            <div className="flex items-center gap-3 sm:pl-64">
               <span className="font-display text-2xl font-extrabold tracking-tight text-amber-400">
                 CORTILE CELESTINI
               </span>
-              <span className="text-xs text-stone-300 hidden sm:inline">
-                · Open-Source Web & Android Street Football
+              <span className="text-xs text-stone-300 hidden lg:inline">
+                · Open-Source MIT · Web & Android
               </span>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                onClick={() => setShowReleaseModal(true)}
+                className="px-3.5 py-2 text-xs font-semibold bg-emerald-950/90 hover:bg-emerald-900 text-emerald-200 border border-emerald-700/80 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+              >
+                <Share2 className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Pubblica & Community</span>
+              </button>
+
               <button
                 onClick={() => {
                   refreshNetworkInfo();
@@ -343,7 +427,6 @@ export default function App() {
                   <stop offset="100%" stopColor="#ef4444" />
                 </linearGradient>
               </defs>
-              {/* Stylized Super Santos Ball Emblem */}
               <circle cx="62" cy="72" r="48" fill="url(#celestiniGrad)" stroke="#18181b" strokeWidth="5" />
               <path
                 d="M 22 48 Q 62 72 102 48 M 20 92 Q 62 70 104 92 M 62 24 L 62 120"
@@ -476,12 +559,13 @@ export default function App() {
               <strong className="text-amber-300">Shift</strong> Scatta ·{' '}
               <strong className="text-amber-300">Spazio / J</strong> Tira (Carica) ·{' '}
               <strong className="text-amber-300">K</strong> Passa / Cambia Uomo ·{' '}
-              <strong className="text-amber-300">L</strong> Cappello / Pallonetto ·{' '}
-              <strong className="text-amber-300">C</strong> Cambia Visuale (FPS/TV) ·{' '}
+              <strong className="text-amber-300">L</strong> Cappello ·{' '}
+              <strong className="text-amber-300">C</strong> Visuale (FPS/TV) ·{' '}
+              <strong className="text-amber-300">F3</strong> Profiler FPS ·{' '}
               <strong className="text-amber-300">Esc</strong> Pausa
             </div>
             <div className="text-stone-400">
-              Risoluzione GPU: {Math.round(renderScale * 100)}% · Pronto per Web & Android
+              Licenza MIT (`/LICENSE` & `/README.md` inclusi) · Pronto per GitHub Pages, Itch.io & Android
             </div>
           </div>
         </div>
@@ -575,7 +659,7 @@ export default function App() {
             </div>
           )}
 
-          {/* Shot Power Charge Bar (Above Player / Bottom-Center above dock) */}
+          {/* Shot Power Charge Bar */}
           {telemetry.shootCharge > 0.02 && (
             <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-10 w-44 bg-stone-950/90 border border-stone-700 rounded-lg p-1.5 pointer-events-none">
               <div className="text-[10px] font-bold text-amber-300 text-center mb-1">
@@ -605,7 +689,6 @@ export default function App() {
           {/* Android / Mobile Virtual Touch Controls Overlay */}
           {showTouchControls && !isPaused && (
             <div className="fixed inset-x-0 bottom-20 z-10 flex items-end justify-between px-6 pointer-events-none">
-              {/* Left Virtual Thumbstick */}
               <div
                 onTouchStart={(e) => {
                   const t = e.touches[0];
@@ -637,7 +720,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Right Tactile Action Pad */}
               <div className="grid grid-cols-2 gap-2.5 pointer-events-auto touch-none">
                 <button
                   onTouchStart={() => {
@@ -693,14 +775,13 @@ export default function App() {
             </div>
           )}
 
-          {/* Unified Collapsible Bottom Control Dock (Zero Side-Panel Clutter) */}
+          {/* Unified Collapsible Bottom Control Dock */}
           <div
             className="fixed bottom-3 left-1/2 -translate-x-1/2 z-10 w-[min(940px,95vw)] transition-transform duration-200 pointer-events-auto"
             style={{
               transform: dockCollapsed ? 'translate(-50%, calc(100% - 34px))' : 'translate(-50%, 0)',
             }}
           >
-            {/* Collapse / Expand Handle */}
             <div className="flex justify-center">
               <button
                 onClick={() => setDockCollapsed((prev) => !prev)}
@@ -720,9 +801,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* Dock Body */}
             <div className="bg-stone-950/95 border border-stone-700/90 rounded-xl p-3 shadow-2xl">
-              {/* Dock Tabs + Quick Actions */}
               <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 mb-2.5 border-b border-stone-800">
                 <div className="flex items-center gap-1 bg-stone-900 p-1 rounded-lg">
                   <button
@@ -774,6 +853,13 @@ export default function App() {
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
                     <span>Palla al Centro</span>
+                  </button>
+                  <button
+                    onClick={() => setShowReleaseModal(true)}
+                    className="px-2.5 py-1 text-xs font-semibold bg-emerald-950 hover:bg-emerald-900 text-emerald-200 border border-emerald-700/70 rounded-md flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                  >
+                    <Share2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Open Source</span>
                   </button>
                   <button
                     onClick={() => setShowControlsModal(true)}
@@ -956,7 +1042,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* Tab 4: LAN / Multiplayer & Hardware Render Scale */}
+              {/* Tab 4: LAN / Multiplayer & Hardware Render Scale + Profiler */}
               {activeDockTab === 'rete' && (
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-2">
@@ -988,19 +1074,22 @@ export default function App() {
                       }}
                       className="px-2.5 py-1 text-xs font-semibold bg-sky-500/20 text-sky-300 border border-sky-500/40 rounded-md cursor-pointer"
                     >
-                      Apri Stanza LAN / Online {onlineRoomCode ? `[${onlineRoomCode}]` : ''}
+                      Stanza LAN {onlineRoomCode ? `[${onlineRoomCode}]` : ''}
                     </button>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Maximize2 className="w-3.5 h-3.5 text-stone-400" />
-                    <span className="text-xs text-stone-300">Render Scale (PC Deboli):</span>
+                    <span className="text-xs text-stone-300">Render Scale:</span>
                     {[0.5, 0.75, 1.0].map((scale) => (
                       <button
                         key={scale}
-                        onClick={() => setRenderScale(scale)}
+                        onClick={() => {
+                          setAutoRenderScale(false);
+                          setRenderScale(scale);
+                        }}
                         className={`px-2 py-1 text-xs font-mono-num font-semibold rounded cursor-pointer ${
-                          renderScale === scale
+                          renderScale === scale && !autoRenderScale
                             ? 'bg-emerald-500 text-stone-950'
                             : 'bg-stone-900 text-stone-400 border border-stone-800'
                         }`}
@@ -1008,6 +1097,26 @@ export default function App() {
                         {Math.round(scale * 100)}%
                       </button>
                     ))}
+                    <button
+                      onClick={() => setAutoRenderScale((prev) => !prev)}
+                      className={`px-2 py-1 text-xs font-semibold rounded cursor-pointer ${
+                        autoRenderScale
+                          ? 'bg-amber-500 text-stone-950'
+                          : 'bg-stone-900 text-stone-400 border border-stone-800'
+                      }`}
+                    >
+                      Auto-FPS
+                    </button>
+                    <button
+                      onClick={() => setShowPerfMonitor((prev) => !prev)}
+                      className={`px-2 py-1 text-xs font-semibold rounded cursor-pointer ${
+                        showPerfMonitor
+                          ? 'bg-sky-500/25 text-sky-300 border border-sky-500/40'
+                          : 'bg-stone-900 text-stone-400 border border-stone-800'
+                      }`}
+                    >
+                      HUD FPS (F3)
+                    </button>
                   </div>
                 </div>
               )}
@@ -1075,7 +1184,6 @@ export default function App() {
             </div>
 
             <div className="space-y-4 text-xs">
-              {/* Nickname */}
               <div>
                 <label className="block text-stone-400 mb-1">Il tuo Soprannome in Cortile</label>
                 <input
@@ -1086,7 +1194,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Active Room Banner */}
               {onlineRoomCode ? (
                 <div className="p-3.5 bg-emerald-950/60 border border-emerald-600/60 rounded-xl">
                   <div className="text-emerald-300 font-bold text-sm">
@@ -1127,7 +1234,6 @@ export default function App() {
 
               {networkError && <div className="text-rose-400 font-semibold">{networkError}</div>}
 
-              {/* Active Rooms on Server / LAN */}
               <div className="bg-stone-950 border border-stone-800 rounded-xl p-3">
                 <div className="flex items-center justify-between mb-2">
                   <span className="font-semibold text-stone-300">
@@ -1168,13 +1274,12 @@ export default function App() {
                 )}
               </div>
 
-              {/* LAN IP Info */}
               <div className="bg-stone-950 border border-stone-800 rounded-xl p-3 text-stone-400">
                 <div className="font-semibold text-stone-200 mb-1">
                   Connessione Diretta LAN / Smartphone Android sulla stessa Wi-Fi:
                 </div>
                 <div>
-                  Stato WebSocket: <strong className="text-emerald-400">{wsConnected ? 'Connesso' : 'Offline'}</strong>
+                  Stato WebSocket: <strong className="text-emerald-400">{wsConnected ? 'Connesso' : 'Modalità Statica / Offline'}</strong>
                   {lanIps.length > 0 && (
                     <span className="ml-2 font-mono-num text-amber-300">
                       Indirizzo LAN: http://{lanIps[0]}:3000
@@ -1187,7 +1292,135 @@ export default function App() {
         </div>
       )}
 
-      {/* 6. CONTROLS & CONTROLLER PRIORITY MODAL */}
+      {/* 6. OPEN-SOURCE RELEASE, PERFORMANCE & COMMUNITY HUB MODAL */}
+      {showReleaseModal && (
+        <div className="fixed inset-0 z-30 bg-stone-950/85 flex items-center justify-center p-4">
+          <div className="bg-stone-900 border border-stone-700 rounded-2xl max-w-2xl w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="font-display text-2xl font-extrabold text-emerald-400">
+                  ROADMAP OPEN-SOURCE, PERFORMANCE & COMMUNITY
+                </h2>
+                <p className="text-xs text-stone-400">
+                  Tutto pronto nel progetto per GitHub Pages, Itch.io, Licenza MIT e raccolta feedback.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowReleaseModal(false)}
+                className="text-xs text-stone-400 hover:text-stone-100 px-2.5 py-1 rounded bg-stone-800 cursor-pointer"
+              >
+                Chiudi
+              </button>
+            </div>
+
+            <div className="space-y-3.5 text-xs">
+              {/* Phase 1 & 2 */}
+              <div className="p-3.5 bg-stone-950 border border-stone-800 rounded-xl">
+                <div className="font-bold text-amber-400 mb-1">
+                  Fase 1 & 2 Completate: Build Relativa (`base: './'`), `LICENSE` MIT & `README.md`
+                </div>
+                <p className="text-stone-300 leading-relaxed">
+                  I file <code className="text-emerald-300">/LICENSE</code> (MIT) e{' '}
+                  <code className="text-emerald-300">/README.md</code> sono presenti nella radice del progetto, e{' '}
+                  <code className="text-emerald-300">vite.config.ts</code> usa già percorsi relativi per funzionare
+                  subito su <strong>GitHub Pages</strong>, nell’iframe ZIP di <strong>Itch.io</strong> (&ldquo;This file
+                  will be played in the browser&rdquo;) e in una WebView <strong>Android</strong>.
+                </p>
+              </div>
+
+              {/* Phase 3: Live Hardware Benchmark */}
+              <div className="p-3.5 bg-stone-950 border border-stone-800 rounded-xl">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-bold text-sky-400">
+                    Fase 3: Telemetria GPU in Tempo Reale (Tasto F3)
+                  </span>
+                  <span className="font-mono-num text-emerald-400 font-bold">
+                    {telemetry.fps} FPS · {telemetry.frameTimeMs} ms · {telemetry.drawCalls} Draw Calls
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-stone-400">Testa subito il Render Scale:</span>
+                  {[0.5, 0.75, 1.0].map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => {
+                        setAutoRenderScale(false);
+                        setRenderScale(s);
+                      }}
+                      className={`px-2.5 py-1 rounded font-mono-num font-semibold cursor-pointer ${
+                        renderScale === s && !autoRenderScale
+                          ? 'bg-sky-400 text-stone-950'
+                          : 'bg-stone-800 text-stone-300'
+                      }`}
+                    >
+                      {Math.round(s * 100)}%
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setAutoRenderScale((prev) => !prev)}
+                    className={`px-2.5 py-1 rounded font-semibold cursor-pointer ${
+                      autoRenderScale ? 'bg-amber-500 text-stone-950' : 'bg-stone-800 text-stone-300'
+                    }`}
+                  >
+                    Auto-Adattamento GPU Deboli: {autoRenderScale ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Phase 4: Ready-to-copy Community Feedback Pitches */}
+              <div className="p-3.5 bg-stone-950 border border-stone-800 rounded-xl space-y-2.5">
+                <div className="font-bold text-emerald-400">
+                  Fase 4: Post Pronti per la Community (Clicca per Copiare)
+                </div>
+
+                <div className="flex items-center justify-between gap-3 bg-stone-900 p-2.5 rounded-lg border border-stone-800">
+                  <div className="text-stone-300">
+                    <strong className="text-stone-100">Reddit IT (`r/IndieHackingItalia`, `r/GameDevelopersItaly`) & GameLoop.it</strong>
+                    <div className="text-[11px] text-stone-400 mt-0.5">
+                      Chiede feedback specifico sulla fisica del Super Santos, sulla doppia visuale FPS/TV e sulle performance su GPU integrate.
+                    </div>
+                  </div>
+                  <button
+                    onClick={() =>
+                      copyCommunityPitch(
+                        'it',
+                        `Ciao a tutti! Sto sviluppando "Cortile Celestini", un gioco di calcio da strada 3D open-source (MIT) nel browser ispirato a La Compagnia dei Celestini e al calcio tra ragazzini.\n\nPotete passare in tempo reale (Tasto C) dalla visuale classica da lontano alla Prima Persona (FPS), e cambiare la fisica del pallone (Super Santos leggerissimo che curva col vento, pallone bagnato pesante, pallone bucato dalla vecchia del cortile).\n\nCerco feedback specifici su:\n1) La traiettoria/rimbalzo del Super Santos vi sembra divertente o troppo imprevedibile?\n2) Come gira su portatili con GPU integrata usando il selettore Render Scale (50%/75%/100%)?`,
+                      )
+                    }
+                    className="px-3 py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-100 rounded-lg font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                  >
+                    {copiedPitchId === 'it' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedPitchId === 'it' ? 'Copiato!' : 'Copia Post IT'}</span>
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 bg-stone-900 p-2.5 rounded-lg border border-stone-800">
+                  <div className="text-stone-300">
+                    <strong className="text-stone-100">Reddit INT (`r/DestroyMyGame`, `r/IndieGaming`, `r/gamedev`)</strong>
+                    <div className="text-[11px] text-stone-400 mt-0.5">
+                      Post in inglese focalizzato sul passaggio istantaneo First-Person POV / Broadcast Camera e sulle gag fisiche.
+                    </div>
+                  </div>
+                  <button
+                    onClick={() =>
+                      copyCommunityPitch(
+                        'en',
+                        `I built "Cortile Celestini", a zero-asset procedural 3D street football browser game (MIT Open Source) where you can switch mid-play between a classic Broadcast Camera and First-Person POV (C key).\n\nIt features real aerodynamic profiles for cheap plastic street balls (Super Santos wobble + Magnus curve), heavy waterlogged balls, and courtyard hazards (shattering condo windows, a neighbor who punctures your ball).\n\nLooking for brutal feedback on:\n1) Does the First-Person POV feel readable when dribbling and charging shots?\n2) How does the frame rate hold up on low-end laptops?`,
+                      )
+                    }
+                    className="px-3 py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-100 rounded-lg font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                  >
+                    {copiedPitchId === 'en' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedPitchId === 'en' ? 'Copiato!' : 'Copia Post EN'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 7. CONTROLS & CONTROLLER PRIORITY MODAL */}
       {showControlsModal && (
         <div className="fixed inset-0 z-30 bg-stone-950/85 flex items-center justify-center p-4">
           <div className="bg-stone-900 border border-stone-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl">
@@ -1216,7 +1449,7 @@ export default function App() {
                   <div><strong className="text-stone-100">L / Z</strong>: Scavetto / &ldquo;Cappello&rdquo;</div>
                   <div><strong className="text-stone-100">E / F</strong>: Scivolata / Contrasto</div>
                   <div><strong className="text-stone-100">C / V</strong>: Passa tra Prima Persona (FPS) e TV</div>
-                  <div><strong className="text-stone-100">B</strong>: Cambia Pallone in tempo reale</div>
+                  <div><strong className="text-stone-100">B / F3</strong>: Cambia Pallone / Profiler FPS</div>
                   <div className="col-span-2">
                     <strong className="text-sky-300">Visuale FPS</strong>: Clicca sul campo per guardare col Mouse, oppure usa <strong className="text-stone-100">Q / R</strong> per ruotare lo sguardo.
                   </div>

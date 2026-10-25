@@ -68,6 +68,11 @@ export interface HudTelemetry {
   activeGag: ActiveGagNotification | null;
   lastBanner: { title: string; subtitle: string } | null;
   pointerLocked: boolean;
+  fps: number;
+  frameTimeMs: number;
+  drawCalls: number;
+  triangles: number;
+  isSoftwareGl: boolean;
 }
 
 interface StreetPitchCanvasProps {
@@ -544,6 +549,9 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
     let lastRenderedScale = stateRef.current.renderScale;
     let telemetryAccumulator = 0;
     let networkBroadcastAccumulator = 0;
+    let framesInWindow = 0;
+    let smoothedFps = 60;
+    let smoothedFrameMs = 4.2;
 
     function afterDraw(cb: () => void) {
       const gl = renderer.getContext() as WebGL2RenderingContext;
@@ -1297,10 +1305,20 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
 
       inputMgr?.endFrame();
 
+      const renderStart = performance.now();
+      renderer.render(scene, camera);
+      const renderElapsed = performance.now() - renderStart;
+      framesInWindow += 1;
+      smoothedFrameMs = smoothedFrameMs * 0.85 + renderElapsed * 0.15;
+
       // Update React HUD Telemetry at ~12Hz so React never slows down the 60fps loop
       telemetryAccumulator += dt;
-      if (telemetryAccumulator >= 0.08) {
+      if (telemetryAccumulator >= 0.12) {
+        const instantFps = Math.min(120, Math.round(framesInWindow / telemetryAccumulator));
+        smoothedFps = Math.round(smoothedFps * 0.65 + instantFps * 0.35);
+        framesInWindow = 0;
         telemetryAccumulator = 0;
+
         if (lastBanner && now > lastBanner.expiresAt) {
           lastBanner = null;
         }
@@ -1324,10 +1342,13 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
           activeGag,
           lastBanner: lastBanner ? { title: lastBanner.title, subtitle: lastBanner.subtitle } : null,
           pointerLocked: Boolean(document.pointerLockElement),
+          fps: smoothedFps,
+          frameTimeMs: Number(smoothedFrameMs.toFixed(1)),
+          drawCalls: renderer.info.render.calls,
+          triangles: renderer.info.render.triangles,
+          isSoftwareGl,
         });
       }
-
-      renderer.render(scene, camera);
 
       if (isSoftwareGl) {
         afterDraw(tick);
