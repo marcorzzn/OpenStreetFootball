@@ -15,7 +15,10 @@ export type GagId =
   | 'finestra_rotta'
   | 'palla_tetto'
   | 'allarme_auto'
-  | 'tombino_fogna';
+  | 'tombino_fogna'
+  | 'cane_palla';
+
+export type GagLifecycleState = 'Idle' | 'Triggered' | 'Beat' | 'Resolve' | 'Cooldown';
 
 export interface BallProfile {
   id: BallProfileId;
@@ -396,6 +399,87 @@ export interface ActiveGagNotification {
   subtitle: string;
   timestamp: number;
 }
+
+export interface GagConfig {
+  id: GagId;
+  label: string;
+  title: string;
+  subtitle: string;
+  probability: number; // Seeded probability in [0, 1] when hitting target
+  triggeredSteps: number; // Duration of 'Triggered' phase in fixed steps (60 steps = 1s)
+  beatSteps: number; // Duration of 'Beat' phase in fixed steps
+  resolveSteps: number; // Duration of 'Resolve' phase in fixed steps
+  cooldownSteps: number; // Cooldown in fixed steps (20-40 simulated seconds = 1200-2400 steps)
+}
+
+export const GAG_CONFIGS: Record<GagId, GagConfig> = {
+  vecchia_buca: {
+    id: 'vecchia_buca',
+    label: 'Vecchia Buca Palla',
+    title: 'LA VECCHIA HA BUCATO IL PALLONE!',
+    subtitle: 'Signora Maria: "Mo\' ve lo taglio co\' le forbici!" — Pallone bucato per 20s!',
+    probability: 0.75,
+    triggeredSteps: 6,
+    beatSteps: 1200, // 20s simulated with punctured ball
+    resolveSteps: 6,
+    cooldownSteps: 2100, // 35s simulated cooldown
+  },
+  finestra_rotta: {
+    id: 'finestra_rotta',
+    label: 'Rompi Finestra',
+    title: 'FINESTRA DEL CONDOMINIO ROTTA!',
+    subtitle: 'Vetro in frantumi! "Chi è stato?!" — Scappa prima che scenda il condomino!',
+    probability: 0.7,
+    triggeredSteps: 6,
+    beatSteps: 720, // 12s simulated before window glass is repaired
+    resolveSteps: 6,
+    cooldownSteps: 1800, // 30s simulated cooldown
+  },
+  palla_tetto: {
+    id: 'palla_tetto',
+    label: 'Palla sul Tetto',
+    title: 'PALLONE FINITO SUL TETTO!',
+    subtitle: 'È rimasto incastrato tra le tegole... Lanciano il pallone di plastica di riserva!',
+    probability: 0.8,
+    triggeredSteps: 6,
+    beatSteps: 156, // 2.6s simulated stuck on the roof
+    resolveSteps: 6,
+    cooldownSteps: 1500, // 25s simulated cooldown
+  },
+  allarme_auto: {
+    id: 'allarme_auto',
+    label: 'Allarme Auto',
+    title: 'ALLARME DELL’AUTO PARCHEGGIATA!',
+    subtitle: 'BEEP! BEEP! BEEP! Rimbalzo elettrico sul cofano!',
+    probability: 0.7,
+    triggeredSteps: 6,
+    beatSteps: 360, // 6.0s simulated flashing lights
+    resolveSteps: 6,
+    cooldownSteps: 1320, // 22s simulated cooldown
+  },
+  tombino_fogna: {
+    id: 'tombino_fogna',
+    label: 'Palla nel Tombino',
+    title: 'PALLA NEL TOMBINO!',
+    subtitle: 'PLOP! Sparita nella griglia... Entra in campo il pallone di plastica di scorta!',
+    probability: 1.0, // 100% probability for storm drain
+    triggeredSteps: 6,
+    beatSteps: 12,
+    resolveSteps: 6,
+    cooldownSteps: 1680, // 28s simulated cooldown
+  },
+  cane_palla: {
+    id: 'cane_palla',
+    label: 'Cane Ruba Palla',
+    title: 'IL CANE HA RUBATO IL PALLONE!',
+    subtitle: 'BAU! BAU! L’ha preso in bocca ed è scappato a bordo campo per qualche secondo!',
+    probability: 0.75,
+    triggeredSteps: 6,
+    beatSteps: 120, // 2.0s simulated: dog runs to ball, grabs it, runs back to sideline
+    resolveSteps: 360, // 6.0s simulated (within 5-8s): ball occupied off-field, then returned to center
+    cooldownSteps: 1920, // 32s simulated cooldown
+  },
+};
 
 export interface PlayerInputState {
   moveX: number; // -1 to 1

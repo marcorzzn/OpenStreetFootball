@@ -295,6 +295,14 @@ export function createStreetPlayerModel(
   };
 }
 
+export interface DogRig {
+  root: THREE.Group;
+  legs: THREE.Mesh[];
+  tail: THREE.Mesh;
+  homeX: number;
+  homeZ: number;
+}
+
 export interface CourtyardEnvironmentRefs {
   group: THREE.Group;
   groundMat: THREE.MeshStandardMaterial;
@@ -303,6 +311,7 @@ export interface CourtyardEnvironmentRefs {
   carGroup: THREE.Group;
   carHeadlights: THREE.Mesh[];
   signoraBalconyGroup: THREE.Group;
+  dogRig: DogRig;
   goalPosts: THREE.Vector3[];
 }
 
@@ -533,6 +542,59 @@ export function buildCourtyardEnvironment(
   drainGrate.position.set(9.5, 0.02, 8.8);
   group.add(drainGrate);
 
+  // GAG 5: Low-Poly Procedural Courtyard Dog (South Sideline at X = 3.5, Z = 9.4)
+  // Built from Three.js primitives (body, head, 2 ears, tail, 4 legs) reusing existing materials
+  const dogHomeX = 3.5;
+  const dogHomeZ = 9.4;
+  const dogRoot = new THREE.Group();
+  dogRoot.position.set(dogHomeX, 0, dogHomeZ);
+  dogRoot.rotation.y = Math.PI; // Facing North toward the pitch
+
+  const dogBody = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.3, 0.68), plasterMat);
+  dogBody.position.set(0, 0.36, 0);
+  dogBody.castShadow = true;
+  dogRoot.add(dogBody);
+
+  const dogHead = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.26, 0.3), plasterMat);
+  dogHead.position.set(0, 0.54, 0.34);
+  dogHead.castShadow = true;
+  dogRoot.add(dogHead);
+
+  const dogSnout = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.16), wheelMat);
+  dogSnout.position.set(0, 0.5, 0.52);
+  dogRoot.add(dogSnout);
+
+  const earGeo = new THREE.BoxGeometry(0.08, 0.16, 0.1);
+  const leftEar = new THREE.Mesh(earGeo, roofMat);
+  leftEar.position.set(-0.12, 0.68, 0.3);
+  leftEar.rotation.z = 0.25;
+  const rightEar = new THREE.Mesh(earGeo, roofMat);
+  rightEar.position.set(0.12, 0.68, 0.3);
+  rightEar.rotation.z = -0.25;
+  dogRoot.add(leftEar, rightEar);
+
+  const dogTail = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.28, 6), roofMat);
+  dogTail.position.set(0, 0.52, -0.38);
+  dogTail.rotation.x = -0.6;
+  dogRoot.add(dogTail);
+
+  const legGeo = new THREE.CylinderGeometry(0.045, 0.04, 0.28, 6);
+  const legOffsets: Array<[number, number]> = [
+    [-0.12, 0.22],
+    [0.12, 0.22],
+    [-0.12, -0.22],
+    [0.12, -0.22],
+  ];
+  const dogLegs: THREE.Mesh[] = legOffsets.map(([lx, lz]) => {
+    const leg = new THREE.Mesh(legGeo, roofMat);
+    leg.position.set(lx, 0.14, lz);
+    leg.castShadow = true;
+    dogRoot.add(leg);
+    return leg;
+  });
+
+  group.add(dogRoot);
+
   // Streetlamps for Night / Sunset atmosphere
   [-12, 0, 12].forEach((lx) => {
     const pole = new THREE.Mesh(
@@ -556,6 +618,13 @@ export function buildCourtyardEnvironment(
     carGroup,
     carHeadlights: [hlLeft, hlRight],
     signoraBalconyGroup,
+    dogRig: {
+      root: dogRoot,
+      legs: dogLegs,
+      tail: dogTail,
+      homeX: dogHomeX,
+      homeZ: dogHomeZ,
+    },
     goalPosts,
   };
 }

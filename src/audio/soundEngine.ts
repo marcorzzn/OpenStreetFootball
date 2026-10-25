@@ -277,7 +277,58 @@ class SoundEngine {
       gain.connect(ctx.destination);
       osc.start(now);
       osc.stop(now + 0.25);
+    } else if (gag === 'cane_palla') {
+      // Synthesized double dog bark ("BAU! BAU!") using sawtooth oscillator + bandpass filter
+      [0, 0.18].forEach((offset) => {
+        const start = now + offset;
+        const osc = ctx.createOscillator();
+        const filter = ctx.createBiquadFilter();
+        const gain = ctx.createGain();
+
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(210, start);
+        osc.frequency.linearRampToValueAtTime(360, start + 0.04);
+        osc.frequency.exponentialRampToValueAtTime(140, start + 0.13);
+
+        filter.type = 'bandpass';
+        filter.frequency.setValueAtTime(680, start);
+        filter.Q.setValueAtTime(2.4, start);
+
+        gain.gain.setValueAtTime(0.28, start);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.14);
+
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + 0.15);
+      });
     }
+  }
+
+  public playDogGrab() {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const filter = ctx.createBiquadFilter();
+    const gain = ctx.createGain();
+
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(260, now);
+    osc.frequency.exponentialRampToValueAtTime(520, now + 0.08);
+
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(900, now);
+
+    gain.gain.setValueAtTime(0.22, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.1);
   }
 }
 

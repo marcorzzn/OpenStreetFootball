@@ -109,6 +109,7 @@ export default function App() {
     isSoftwareGl: false,
     physicsStepsLastFrame: 1,
     cameraFar: 140,
+    activeGagStateLabel: 'nessuna gag',
   });
 
   const inputManagerRef = useRef<InputManager | null>(null);
@@ -399,6 +400,10 @@ export default function App() {
             <span>
               camera.far: <strong className="text-emerald-300">{telemetry.cameraFar}m</strong>
             </span>
+            <span>·</span>
+            <span>
+              Gag: <strong className="text-amber-300">{telemetry.activeGagStateLabel}</strong>
+            </span>
           </div>
         </div>
       )}
@@ -514,7 +519,7 @@ export default function App() {
             </p>
 
             {/* Quick Mode & Camera Selector Row */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6 max-w-xl">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6 max-w-2xl">
               <div className="bg-stone-900/90 border border-stone-700/80 rounded-xl p-3">
                 <div className="text-[11px] text-stone-400 mb-1.5">Visuale di Gioco (Tasto C)</div>
                 <div className="flex gap-1.5">
@@ -574,6 +579,32 @@ export default function App() {
                   <option value="local_2p">2P Locale (Tastiera / 2 Pad)</option>
                   <option value="online_lan">Online / LAN Stanza</option>
                 </select>
+              </div>
+
+              <div className="bg-stone-900/90 border border-stone-700/80 rounded-xl p-3">
+                <div className="text-[11px] text-stone-400 mb-1.5">Gag classiche</div>
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => setGagsEnabled(true)}
+                    className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                      gagsEnabled
+                        ? 'bg-amber-500 text-stone-950'
+                        : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                    }`}
+                  >
+                    Sì
+                  </button>
+                  <button
+                    onClick={() => setGagsEnabled(false)}
+                    className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+                      !gagsEnabled
+                        ? 'bg-rose-500 text-stone-950'
+                        : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                    }`}
+                  >
+                    No
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1044,17 +1075,27 @@ export default function App() {
               {activeDockTab === 'gag' && (
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <label className="flex items-center gap-2 text-xs font-semibold text-stone-200 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={gagsEnabled}
-                        onChange={(e) => setGagsEnabled(e.target.checked)}
-                        className="rounded accent-amber-500"
-                      />
-                      <span>Gag Classiche Attive</span>
-                    </label>
-                    <span className="text-[11px] text-stone-400 hidden sm:inline">
-                      (Scattano tirando verso balcone, finestra, tetto, auto parcheggiata o tombino — oppure provale subito:)
+                    <span className="text-xs font-semibold text-stone-200">Gag classiche:</span>
+                    <div className="inline-flex rounded-lg border border-stone-700 overflow-hidden">
+                      <button
+                        onClick={() => setGagsEnabled(true)}
+                        className={`px-2.5 py-1 text-xs font-semibold cursor-pointer ${
+                          gagsEnabled ? 'bg-amber-500 text-stone-950' : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                        }`}
+                      >
+                        Sì
+                      </button>
+                      <button
+                        onClick={() => setGagsEnabled(false)}
+                        className={`px-2.5 py-1 text-xs font-semibold cursor-pointer ${
+                          !gagsEnabled ? 'bg-rose-500 text-stone-950' : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                        }`}
+                      >
+                        No
+                      </button>
+                    </div>
+                    <span className="text-[11px] text-stone-400 hidden lg:inline">
+                      (Con "No" nessuna gag scatta da sola; i pulsanti rapidi qui accanto restano sempre attivi per i test)
                     </span>
                   </div>
 
@@ -1088,6 +1129,12 @@ export default function App() {
                       className="px-2.5 py-1.5 text-xs font-semibold bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-600 rounded-lg cursor-pointer whitespace-nowrap"
                     >
                       Palla nel Tombino
+                    </button>
+                    <button
+                      onClick={() => setTriggerGagRequest({ gag: 'cane_palla', seq: Date.now() })}
+                      className="px-2.5 py-1.5 text-xs font-semibold bg-amber-950/90 hover:bg-amber-900 text-amber-200 border border-amber-700/70 rounded-lg cursor-pointer whitespace-nowrap"
+                    >
+                      Cane Ruba Palla
                     </button>
                   </div>
                 </div>
