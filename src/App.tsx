@@ -363,7 +363,7 @@ export default function App() {
           <div className="flex items-center justify-between gap-6 pointer-events-auto mt-7 sm:mt-0">
             <div className="flex items-center gap-3 sm:pl-64">
               <span className="font-display text-2xl font-extrabold tracking-tight text-amber-400">
-                CORTILE CELESTINI
+                OPENSTREETFOOTBALL
               </span>
               <span className="text-xs text-stone-300 hidden lg:inline">
                 · Open-Source MIT · Web & Android
@@ -411,23 +411,23 @@ export default function App() {
           {/* Center-Left Bespoke Inline SVG Title Lockup over open negative space */}
           <div className="my-auto max-w-2xl pointer-events-auto">
             <div className="text-xs font-medium tracking-wider text-amber-300 mb-2">
-              ISPIRATO ALLA COMPAGNIA DEI CELESTINI · FISICA REALE SUPER SANTOS · FPS & TV CAMERA
+              CALCIO DA CORTILE OPEN-SOURCE · FISICA DEI PALLONI · VISUALE FPS & TV
             </div>
 
             <svg
-              viewBox="0 0 680 145"
+              viewBox="0 0 720 145"
               className="w-full max-w-xl h-auto mb-4 drop-shadow-[0_6px_24px_rgba(0,0,0,0.85)]"
               role="img"
-              aria-label="Cortile Celestini Street Football"
+              aria-label="OpenStreetFootball"
             >
               <defs>
-                <linearGradient id="celestiniGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <linearGradient id="osfGrad" x1="0%" y1="0%" x2="100%" y2="100%">
                   <stop offset="0%" stopColor="#fbbf24" />
                   <stop offset="55%" stopColor="#f97316" />
                   <stop offset="100%" stopColor="#ef4444" />
                 </linearGradient>
               </defs>
-              <circle cx="62" cy="72" r="48" fill="url(#celestiniGrad)" stroke="#18181b" strokeWidth="5" />
+              <circle cx="62" cy="72" r="48" fill="url(#osfGrad)" stroke="#18181b" strokeWidth="5" />
               <path
                 d="M 22 48 Q 62 72 102 48 M 20 92 Q 62 70 104 92 M 62 24 L 62 120"
                 stroke="#18181b"
@@ -441,10 +441,10 @@ export default function App() {
                 fontFamily="'Barlow Condensed', sans-serif"
                 fontWeight="800"
                 fontStyle="italic"
-                fontSize="68"
+                fontSize="64"
                 letterSpacing="1"
               >
-                CORTILE CELESTINI
+                OPENSTREETFOOTBALL
               </text>
               <text
                 x="134"
@@ -462,7 +462,7 @@ export default function App() {
             <p className="text-sm md:text-base text-stone-200 max-w-xl leading-relaxed mb-6">
               Scegli se giocare <strong className="text-amber-300">da lontano</strong> come nei classici arcade o
               entrare negli occhi del calciatore in <strong className="text-sky-300">Prima Persona (FPS)</strong>.
-              Calcia il leggendario <em>Super Santos</em>, sfida la pioggia col pallone di cuoio pesante e attento
+              Calcia il leggero <em>pallone di plastica</em>, sfida la pioggia col pallone di cuoio pesante e attento
               alla finestra del condominio e alle forbici della Signora Maria!
             </p>
 
@@ -578,7 +578,7 @@ export default function App() {
           <div className="fixed top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 px-4 py-2 bg-stone-950/92 border border-stone-700/90 rounded-xl shadow-lg pointer-events-auto">
             <div className="flex items-center gap-2">
               <span className="w-3 h-3 rounded-sm bg-sky-500 inline-block" />
-              <span className="font-display text-lg font-bold tracking-wide text-sky-400">CELESTINI</span>
+              <span className="font-display text-lg font-bold tracking-wide text-sky-400">AZZURRI</span>
               <span className="font-mono-num text-2xl font-bold text-stone-100 px-1.5">
                 {telemetry.scoreBlue}
               </span>
@@ -1003,7 +1003,7 @@ export default function App() {
                       <span>Gag Classiche Attive</span>
                     </label>
                     <span className="text-[11px] text-stone-400 hidden sm:inline">
-                      (Scattano tirando verso balcone, finestra, tetto, Panda o tombino — oppure provale subito:)
+                      (Scattano tirando verso balcone, finestra, tetto, auto parcheggiata o tombino — oppure provale subito:)
                     </span>
                   </div>
 
@@ -1030,7 +1030,7 @@ export default function App() {
                       onClick={() => setTriggerGagRequest({ gag: 'allarme_auto', seq: Date.now() })}
                       className="px-2.5 py-1.5 text-xs font-semibold bg-emerald-950/90 hover:bg-emerald-900 text-emerald-200 border border-emerald-700/70 rounded-lg cursor-pointer whitespace-nowrap"
                     >
-                      Allarme Panda
+                      Allarme Auto
                     </button>
                     <button
                       onClick={() => setTriggerGagRequest({ gag: 'tombino_fogna', seq: Date.now() })}
@@ -1377,14 +1377,14 @@ export default function App() {
                   <div className="text-stone-300">
                     <strong className="text-stone-100">Reddit IT (`r/IndieHackingItalia`, `r/GameDevelopersItaly`) & GameLoop.it</strong>
                     <div className="text-[11px] text-stone-400 mt-0.5">
-                      Chiede feedback specifico sulla fisica del Super Santos, sulla doppia visuale FPS/TV e sulle performance su GPU integrate.
+                      Chiede feedback specifico sulla fisica del pallone di plastica, sulla doppia visuale FPS/TV e sulle performance su GPU integrate.
                     </div>
                   </div>
                   <button
                     onClick={() =>
                       copyCommunityPitch(
                         'it',
-                        `Ciao a tutti! Sto sviluppando "Cortile Celestini", un gioco di calcio da strada 3D open-source (MIT) nel browser ispirato a La Compagnia dei Celestini e al calcio tra ragazzini.\n\nPotete passare in tempo reale (Tasto C) dalla visuale classica da lontano alla Prima Persona (FPS), e cambiare la fisica del pallone (Super Santos leggerissimo che curva col vento, pallone bagnato pesante, pallone bucato dalla vecchia del cortile).\n\nCerco feedback specifici su:\n1) La traiettoria/rimbalzo del Super Santos vi sembra divertente o troppo imprevedibile?\n2) Come gira su portatili con GPU integrata usando il selettore Render Scale (50%/75%/100%)?`,
+                        `Ciao a tutti! Sto sviluppando "OpenStreetFootball", un gioco di calcio da strada 3D open-source (MIT) nel browser ispirato al calcio amatoriale tra ragazzini.\n\nPotete passare in tempo reale (Tasto C) dalla visuale classica da lontano alla Prima Persona (FPS), e cambiare la fisica del pallone (pallone di plastica leggerissimo che curva col vento, pallone bagnato pesante, pallone bucato dalla vecchia del cortile).\n\nCerco feedback specifici su:\n1) La traiettoria/rimbalzo del pallone di plastica vi sembra divertente o troppo imprevedibile?\n2) Come gira su portatili con GPU integrata usando il selettore Render Scale (50%/75%/100%)?`,
                       )
                     }
                     className="px-3 py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-100 rounded-lg font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
@@ -1405,7 +1405,7 @@ export default function App() {
                     onClick={() =>
                       copyCommunityPitch(
                         'en',
-                        `I built "Cortile Celestini", a zero-asset procedural 3D street football browser game (MIT Open Source) where you can switch mid-play between a classic Broadcast Camera and First-Person POV (C key).\n\nIt features real aerodynamic profiles for cheap plastic street balls (Super Santos wobble + Magnus curve), heavy waterlogged balls, and courtyard hazards (shattering condo windows, a neighbor who punctures your ball).\n\nLooking for brutal feedback on:\n1) Does the First-Person POV feel readable when dribbling and charging shots?\n2) How does the frame rate hold up on low-end laptops?`,
+                        `I built "OpenStreetFootball", a zero-asset procedural 3D street football browser game (MIT Open Source) where you can switch mid-play between a classic Broadcast Camera and First-Person POV (C key).\n\nIt features real aerodynamic profiles for cheap plastic street balls (chaotic wobble + Magnus curve), heavy waterlogged balls, and courtyard hazards (shattering condo windows, a neighbor who punctures your ball).\n\nLooking for brutal feedback on:\n1) Does the First-Person POV feel readable when dribbling and charging shots?\n2) How does the frame rate hold up on low-end laptops?`,
                       )
                     }
                     className="px-3 py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-100 rounded-lg font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"

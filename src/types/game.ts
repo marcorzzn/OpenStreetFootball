@@ -45,7 +45,7 @@ export interface BallProfile {
 export const BALL_PROFILES: Record<BallProfileId, BallProfile> = {
   supersantos: {
     id: 'supersantos',
-    name: 'Super Santos',
+    name: 'Pallone di Plastica',
     subtitle: 'Plastica arancione leggera, effetto matto e traiettoria imprevedibile col vento',
     mass: 0.18,
     radius: 0.105,
@@ -132,7 +132,7 @@ export interface WeatherConfig {
 export const WEATHER_CONFIGS: Record<WeatherId, WeatherConfig> = {
   tramonto: {
     id: 'tramonto',
-    name: 'Tramonto Celestini',
+    name: 'Tramonto Dorato',
     description: 'Luce dorata poetica tra i palazzi, ombre lunghe e colori saturi',
     skyColor: '#e07a5f',
     fogColor: '#e07a5f',
@@ -178,7 +178,7 @@ export const WEATHER_CONFIGS: Record<WeatherId, WeatherConfig> = {
   vento: {
     id: 'vento',
     name: 'Maestrale di Quartiere',
-    description: 'Raffiche laterali che fanno curvare il Super Santos come una foglia',
+    description: 'Raffiche laterali che fanno curvare il pallone di plastica come una foglia',
     skyColor: '#38bdf8',
     fogColor: '#7dd3fc',
     fogDensity: 0.007,
@@ -247,7 +247,7 @@ export const PITCH_CONFIGS: Record<PitchId, PitchConfig> = {
   strada: {
     id: 'strada',
     name: 'Strada di Periferia',
-    subtitle: 'Asfalto veloce, porte con due pietre, tombino e Panda parcheggiata con allarme',
+    subtitle: 'Asfalto veloce, porte con due pietre, tombino e auto parcheggiata con allarme',
     groundColor: '#3f3f46',
     lineColor: '#fde047',
     goalpostStyle: 'pietre',

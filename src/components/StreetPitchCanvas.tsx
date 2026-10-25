@@ -506,7 +506,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
       } else if (gag === 'allarme_auto') {
         activeGag = {
           id: gag,
-          title: 'ALLARME DELLA PANDA ATTIVATO!',
+          title: 'ALLARME DELL’AUTO PARCHEGGIATA!',
           subtitle: 'BEEP! BEEP! BEEP! Rimbalzo elettrico sul cofano!',
           timestamp: Date.now(),
         };
@@ -518,7 +518,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         activeGag = {
           id: gag,
           title: 'PALLONE FINITO SUL TETTO!',
-          subtitle: 'È rimasto incastrato tra le tegole... Lanciano il Super Santos di riserva!',
+          subtitle: 'È rimasto incastrato tra le tegole... Lanciano il pallone di plastica di riserva!',
           timestamp: Date.now(),
         };
         ball.roofStuckTimer = 2.6;
@@ -526,7 +526,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
         activeGag = {
           id: gag,
           title: 'PALLA NEL TOMBINO!',
-          subtitle: 'PLOP! Sparita nella griglia... Entra in campo il Super Santos di scorta!',
+          subtitle: 'PLOP! Sparita nella griglia... Entra in campo il pallone di plastica di scorta!',
           timestamp: Date.now(),
         };
         callbacksRef.current.onBallProfileChange('supersantos');
@@ -706,7 +706,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
             callbacksRef.current.onBallProfileChange('supersantos');
             lastBanner = {
               title: 'PALLA NUOVA IN CAMPO!',
-              subtitle: 'È uscito un Super Santos nuovo di zecca!',
+              subtitle: 'È uscito un pallone di plastica nuovo di zecca!',
               expiresAt: now + 3200,
             };
           }
@@ -1107,7 +1107,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
                   scoreBlue += 1;
                   soundEngine.playGoalCheer();
                   lastBanner = {
-                    title: '3 PALI = GOL CELESTINI!',
+                    title: '3 PALI = GOL AZZURRI!',
                     subtitle: 'Terzo palo colpito: scatta il gol automatico secondo la regola del cortile!',
                     expiresAt: now + 3500,
                   };
@@ -1136,7 +1136,7 @@ export const StreetPitchCanvas: React.FC<StreetPitchCanvasProps> = ({
             if (scoredByBlue) {
               scoreBlue += bonusSponda;
               lastBanner = {
-                title: bonusSponda > 1 ? 'GOL DI SPONDA DOPPIO! (+2)' : 'GOOOL DEI CELESTINI!',
+                title: bonusSponda > 1 ? 'GOL DI SPONDA DOPPIO! (+2)' : 'GOOOL DEGLI AZZURRI!',
                 subtitle:
                   st.streetRule === 'chi_segna_vince'
                     ? ' Regola Chi Segna Vince: Vittoria immediata!'

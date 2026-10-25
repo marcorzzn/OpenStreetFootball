@@ -1,87 +1,98 @@
-# ⚽ Cortile Celestini — Open Street Football
+# ⚽ OpenStreetFootball
 
-Un gioco di calcio da strada 3D **100% open-source e gratuito**, ispirato alle atmosfere poetiche de *La Compagnia dei Celestini* e al calcio amatoriale tra ragazzini nei cortili italiani.
+**OpenStreetFootball** è un gioco di calcio da strada 3D **100% open-source (licenza MIT) e gratuito** che gira direttamente nel browser, progettato per funzionare in modo fluido anche su **macchine poco potenti** (GPU integrate, portatili datati) e predisposto per dispositivi mobili **Android**.
 
-Progettato per girare fluidamente su **qualsiasi browser moderno anche su macchine poco potenti** (GPU integrate, vecchi portatili) e già predisposto per **Android** (controlli touch virtuali e controller Bluetooth/USB).
+Rievoca il calcio amatoriale tra ragazzini nei cortili e nelle strade di quartiere: porte fatte con i giubbotti o con le pietre, sponde sui muri, condizioni meteo variabili, gag di cortile e palloni con comportamenti fisici molto diversi tra loro.
 
 ---
 
 ## ✨ Caratteristiche Principali
 
 1. **Doppia Visuale in Tempo Reale (`Tasto C` / `V`)**:
-   - **Visuale Classica TV (Da Lontano)**: telecamera dinamica ampia in stile arcade/broadcast che segue l'azione e le sponde sui muri.
-   - **Visuale Prima Persona (FPS / POV)**: gioca dagli occhi del calciatore con mirino, *head-bob* in corsa, scarpini visibili durante il tiro e rotazione libera dello sguardo (Mouse, tasti `Q`/`R` o Stick Destro del pad).
-2. **Fisica Reale dei Palloni Nostalgici (`Tasto B`)**:
-   - 🟠 **Super Santos**: leggerissimo (`0.18 kg`), rimbalzo altissimo (`93%`), effetto Magnus accentuato e oscillazione aerodinamica imprevedibile (*wobble*) sopra i `7 m/s` e col vento.
-   - ⚽ **Cuoio 32 Esagoni**: il classico pallone cucito a mano, equilibrato e sincero.
-   - 🌧️ **Cuoio Bagnato (Piombo)**: inzuppato d'acqua (`0.68 kg`), pesantissimo, rimbalza pochissimo e frena sull'asfalto (si attiva anche automaticamente dopo 45 secondi di pioggia).
-   - ✂️ **Pallone Bucato**: forato dalle forbici della Signora Maria, perde pressione nel tempo, sbanda e sibila ad ogni calcio.
-3. **Gag del Cortile (Trigger 3D + Macchina a Stati)**:
-   - **La Vecchia buca il pallone**: se tiri sul balcone fiorito a nord-ovest, la Signora Maria buca la palla per 20 secondi.
-   - **Finestra Rotta**: colpendo la vetrata del condominio a nord-est, il vetro esplode in frantumi balistici 3D.
-   - **Pallone sul Tetto**: i pallonetti troppo alti restano incastrati sulle tegole prima che venga lanciato il pallone di riserva.
-   - **Allarme della Panda**: colpendo l'utilitaria parcheggiata scatta la sirena con fari lampeggianti.
-   - **Palla nel Tombino**: finendo sulla griglia di scolo, sparisce con un *plop* ed entra in campo il Super Santos di scorta.
-4. **Multiplayer Online, LAN e Locale**:
-   - **1P vs IA del Rione (3v3)** con cambio giocatore rapido (`K`).
-   - **2P Locale** sulla stessa tastiera o con 2 controller esterni.
-   - **Online & LAN** tramite server WebSocket autoritativo integrato (`server.ts`) con stanze a codice di 5 lettere e rilevamento automatico dell'IP LAN locale.
-5. **Profiler Performance In-Game (`Tasto F3`) & Render Scale**:
-   - Monitor in tempo reale di **FPS**, **Frame Time (ms)**, **Draw Calls**, **Triangoli WebGL** e **Risoluzione Interna (`50%`, `75%`, `100%` + Auto-FPS Guard)** per garantire 60 FPS anche su GPU integrate datate.
+   - **Visuale Classica TV (Da Lontano)**: inquadratura ampia dinamica in stile arcade che segue l'azione, i passaggi e le sponde sui muri.
+   - **Visuale Prima Persona (FPS / POV)**: visuale dagli occhi del giocatore controllato con mirino centrale, oscillazione del passo (*head-bob*), gambe/scarpini visibili durante il calcio e rotazione libera dello sguardo (Mouse, tasti `Q`/`R` o Stick Destro del controller).
+2. **Profili Fisici dei Palloni (`Tasto B`)**:
+   - 🟠 **Pallone di Plastica**: leggerissimo (`0.18 kg`), rimbalzo altissimo (`93%`), effetto Magnus accentuato e traiettoria imprevedibile (*wobble*) alle alte velocità e col vento.
+   - ⚽ **Cuoio 32 Esagoni**: il classico pallone cucito a mano, equilibrato nel peso (`0.43 kg`) e nel rimbalzo.
+   - 🌧️ **Cuoio Bagnato (Piombo)**: inzuppato d'acqua (`0.68 kg`), pesantissimo, rimbalza pochissimo e frena rapidamente (si attiva anche in automatico dopo 45 secondi di pioggia).
+   - ✂️ **Pallone Bucato**: forato per dispetto, perde pressione e raggio col passare dei secondi, sbanda e sibila ad ogni tocco.
+3. **Meteo e Gag del Cortile**:
+   - **Meteo**: *Tramonto Dorato*, *Pomeriggio d'Estate*, *Acquazzone Estivo*, *Vento di Quartiere*, *Nebbia Fitta* e *Notturna coi Lampioni*.
+   - **Gag**: *La vecchia che buca il pallone* dal balcone, *Finestra rotta* con schegge 3D, *Pallone sul tetto*, *Allarme dell'auto parcheggiata* e *Palla nel tombino* (disattivabili dal menu).
+4. **Profiler Prestazioni (`Tasto F3`) & Render Scale**:
+   - Monitor in-game in tempo reale per **FPS**, **Frame Time (ms)**, **Draw Calls**, **Triangoli WebGL** e selettore di risoluzione interna (**50%**, **75%**, **100%** + **Auto-FPS**) per garantire fluidità su hardware modesto.
 
 ---
 
-## 🚀 Avvio Rapido in Locale & Multiplayer LAN
+## 🚀 Come Avviare il Gioco in Locale
 
 ### Prerequisiti
-- [Node.js](https://nodejs.org/) (v18 o superiore)
+- [Node.js](https://nodejs.org/) (v18+) oppure [Bun](https://bun.sh/)
 
-### 1. Installazione
+### Installazione e Avvio
 ```bash
+# Installa le dipendenze
 npm install
-```
+# (oppure: bun install)
 
-### 2. Avvio Server di Sviluppo + WebSocket LAN (Porta 3000)
-```bash
+# Avvia il client Vite + il server WebSocket LAN sulla porta 3000
 npm run dev
+# (oppure: bun run dev)
 ```
-- Apri `http://localhost:3000` sul tuo PC.
-- Per giocare in **LAN** con amici o da uno **smartphone Android** collegato alla stessa rete Wi-Fi, apri il menu **Lobby Online / LAN** nel gioco: vedrai l'indirizzo IP locale (es. `http://192.168.1.X:3000`) e il codice stanza da condividere.
+
+Apri il browser all'indirizzo: **`http://localhost:3000`**
 
 ---
 
-## 📦 Pubblicazione Gratuita (GitHub Pages, Itch.io e Android)
+## 🌐 Come Giocare in Multiplayer LAN (con `server.ts`)
 
-Il file `vite.config.ts` utilizza già `base: './'`, generando percorsi relativi compatibili con qualsiasi hosting statico o WebView Android:
+Il comando `npm run dev` (o `npm start`) esegue `server.ts`, che avvia sia il sito web sia il server WebSocket autoritativo sulla porta `3000`:
 
-```bash
-npm run build
-```
+1. Sul computer **Host**, avvia `npm run dev` e clicca sul pulsante **Lobby Online / LAN** in alto a destra.
+2. Nella finestra della Lobby leggerai l'**Indirizzo LAN** rilevato automaticamente sulla tua rete Wi-Fi/Ethernet (ad esempio `http://192.168.1.25:3000`).
+3. Clicca su **+ Crea Nuova Stanza Host**: otterrai un codice stanza di 5 lettere (es. `K7M9P`).
+4. Gli altri giocatori (su altri PC o smartphone Android collegati alla **stessa rete Wi-Fi/LAN**) aprono il browser all'indirizzo `http://<IP-DELL-HOST>:3000`, aprono **Lobby Online / LAN** e inseriscono il codice stanza (oppure cliccano direttamente su **Unisciti** nella lista delle stanze aperte).
 
-1. **GitHub Pages**: pubblica il contenuto della cartella `dist/` tramite GitHub Actions o branch `gh-pages`.
-2. **Itch.io**: comprimi il contenuto della cartella `dist/` in un file `.zip` (assicurandoti che `index.html` sia nella radice dello ZIP), caricalo su Itch.io e spunta **"This file will be played in the browser"**.
-3. **Android (Capacitor / WebView)**: la build in `dist/` può essere incapsulata direttamente con `@capacitor/android` per generare un APK nativo con controlli Touch e Gamepad Bluetooth già pronti.
+### ⚠️ Limiti su GitHub Pages e Itch.io (Hosting Statico)
+- **GitHub Pages** e **Itch.io** ospitano esclusivamente file statici (`HTML`, `JS`, `CSS`) e **non eseguono il processo Node.js `server.ts`**.
+- Pertanto, aprendo il gioco da GitHub Pages o Itch.io funzionano immediatamente:
+  - **1P vs IA del Rione (3v3)**
+  - **2P Locale** (sulla stessa tastiera o con 2 controller collegati allo stesso dispositivo)
+- Per usare il **Multiplayer in LAN / Rete** tra dispositivi diversi, l'Host deve avviare il progetto con `npm run dev` (o `npm start`) sul proprio computer.
 
 ---
 
-## 🎮 Tabella dei Controlli (Priorità Tastiera + Controller Esterni + Touch)
+## 🎮 Controlli di Gioco (Priorità Tastiera + Gamepad + Touch)
 
-| Azione | Tastiera Giocatore 1 (Prioritaria) | Tastiera Giocatore 2 (Locale) | Controller Esterno (Xbox / PS / Android) | Touch Android |
+| Azione | Tastiera Giocatore 1 (Prioritaria) | Tastiera Giocatore 2 (Locale) | Controller Esterno (Xbox / PS / USB / BT) | Touch Android |
 | :--- | :--- | :--- | :--- | :--- |
 | **Movimento** | `W` `A` `S` `D` | `Frecce Direzionali` | Stick Sinistro / D-Pad | Stick Virtuale Sinistro |
 | **Scatto** | `Shift Sinistro` | `Ctrl Destro` / `Num 0` | `RT` / `R2` | Tasto `SCATTA` |
 | **Tiro (Carica)** | `Spazio` oppure `J` | `Invio` / `Num 1` | `X` / `Quadrato` / `RB` | Tasto `TIRO` |
 | **Passa / Cambia Uomo** | `K` oppure `X` | `Shift Destro` / `Num 2` | `A` / `Croce` | Tasto `PASSA` |
-| **Cappello / Scavetto** | `L` oppure `Z` | `M` / `\` | `Y` / `Triangolo` | Tasto `CAPPELLO` |
-| **Scivolata** | `E` oppure `F` | `.` / `Num 3` | `B` / `Cerchio` | Doppio Tap |
+| **Pallonetto (Cappello)** | `L` oppure `Z` | `M` / `\` | `Y` / `Triangolo` | Tasto `CAPPELLO` |
+| **Scivolata / Contrasto** | `E` oppure `F` | `.` / `Num 3` | `B` / `Cerchio` | — |
 | **Visuale FPS / TV** | `C` oppure `V` | — | `Select` / `R3` | Tasto `FPS / TV` |
-| **Sguardo in FPS** | `Mouse` (Click) o `Q` / `R` | — | Stick Destro | Drag su schermo |
-| **Cambia Pallone** | `B` | — | `LB` / `L1` | Selettore Dock |
-| **Profiler FPS / GPU** | `F3` | — | — | Dock Prestazioni |
-| **Nascondi Dock** | `H` | — | — | Maniglia Dock |
+| **Ruota Sguardo (FPS)** | `Mouse` (Click sul campo) o `Q` / `R` | — | Stick Destro | — |
+| **Cambia Pallone** | `B` | — | `LB` / `L1` | Selettore nel Dock |
+| **Profiler FPS / GPU** | `F3` | — | — | Pulsante `HUD FPS (F3)` |
+| **Mostra / Nascondi Dock** | `H` | — | — | Maniglia superiore Dock |
+| **Pausa** | `Esc` | `Esc` | `Start` | Icona Pausa in alto |
 
 ---
 
-## 📜 Licenza
+## 📊 Profiler Performance (`F3`) per Macchine Poco Potenti
 
-Rilasciato sotto **[Licenza MIT](./LICENSE)** — completamente libero, gratuito e aperto ai contributi della community. Zero asset proprietari: tutti i modelli 3D, le texture e gli effetti sonori Web Audio sono generati proceduralmente in codice.
+Premendo **`F3`** (o cliccando su `HUD FPS (F3)` nella scheda *4. Rete LAN & Prestazioni* del dock inferiore) puoi attivare o nascondere il monitor delle prestazioni in alto a sinistra, che mostra:
+- **FPS** attuali e **tempo di rendering per frame (`ms`)**
+- **Draw Calls** e **Triangoli WebGL**
+- **Render Scale attivo (`50%`, `75%`, `100%`)**
+
+Su notebook con scheda video integrata, impostare il **Render Scale a `75%` o `50%`** (o attivare `Auto-FPS`) riduce il carico per pixel mantenendo l'interfaccia nitida.
+
+---
+
+## 📜 Crediti e Licenza
+
+- **Zero Asset Protetti**: tutti i modelli 3D, le texture Canvas 2D e gli effetti sonori Web Audio API sono generati proceduralmente nel codice sorgente. Nessun asset o marchio di terze parti è incluso.
+- Distribuito sotto **[Licenza MIT](./LICENSE)** — Copyright (c) 2026 Marco Razzano (`marcorzzn`).
