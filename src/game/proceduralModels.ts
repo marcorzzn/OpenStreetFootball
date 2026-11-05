@@ -1,5 +1,12 @@
 import * as THREE from 'three';
-import { BALL_PROFILES, BallProfileId, PITCH_CONFIGS, PitchId } from '../types/game';
+import {
+  BALL_PROFILES,
+  BallProfileId,
+  getEffectivePitchDimensions,
+  PITCH_CONFIGS,
+  PitchId,
+  TeamSize,
+} from '../types/game';
 
 export function detectSoftwareWebGL(): boolean {
   if (typeof document === 'undefined') return false;
@@ -10,6 +17,170 @@ export function detectSoftwareWebGL(): boolean {
   const gpu = String(gl.getParameter(param));
   gl.getExtension('WEBGL_lose_context')?.loseContext();
   return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
+}
+
+// Shared 3-step cel-shading gradient texture (NearestFilter for graphic-novel comic bands)
+let sharedToonGradientMap: THREE.DataTexture | null = null;
+export function getToonGradientMap(): THREE.DataTexture {
+  if (sharedToonGradientMap) return sharedToonGradientMap;
+  const data = new Uint8Array([
+    165, 165, 165, 255,
+    222, 222, 222, 255,
+    255, 255, 255, 255,
+  ]);
+  const tex = new THREE.DataTexture(data, 3, 1, THREE.RGBAFormat);
+  tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
+  tex.generateMipmaps = false;
+  tex.needsUpdate = true;
+  sharedToonGradientMap = tex;
+  return tex;
+}
+
+const sharedOutlineMat = new THREE.MeshBasicMaterial({
+  color: 0x09090b,
+  side: THREE.BackSide,
+});
+
+const sharedEdgeLineMat = new THREE.LineBasicMaterial({
+  color: 0x09090b,
+});
+
+export function createToonMaterial(
+  color: number | string,
+  map?: THREE.Texture,
+): THREE.MeshToonMaterial {
+  return new THREE.MeshToonMaterial({
+    color,
+    map: map || null,
+    gradientMap: getToonGradientMap(),
+  });
+}
+
+/**
+ * Adds a bold black comic-book outline around curved/organic meshes using an Inverted Hull (BackSide).
+ */
+export function addComicOutline(mesh: THREE.Mesh, scaleFactor = 1.055): THREE.Mesh {
+  const outline = new THREE.Mesh(mesh.geometry, sharedOutlineMat);
+  outline.scale.setScalar(scaleFactor);
+  outline.castShadow = false;
+  outline.receiveShadow = false;
+  mesh.add(outline);
+  return outline;
+}
+
+/**
+ * Adds both crisp black edge lines and an inverted-hull silhouette border to architectural comic meshes.
+ */
+export function addBoxOutline(mesh: THREE.Mesh, hullScale = 1.025): void {
+  const edgesGeo = new THREE.EdgesGeometry(mesh.geometry, 25);
+  const lines = new THREE.LineSegments(edgesGeo, sharedEdgeLineMat);
+  mesh.add(lines);
+
+  const hull = new THREE.Mesh(mesh.geometry, sharedOutlineMat);
+  hull.scale.setScalar(hullScale);
+  hull.castShadow = false;
+  hull.receiveShadow = false;
+  mesh.add(hull);
+}
+
+/**
+ * Creates a flat comic-book sign texture with bold typography and thick black frame.
+ */
+function createComicSignTexture(
+  text: string,
+  subtitle: string | null,
+  bgColor: string,
+  textColor: string,
+  stripeColor?: string,
+): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 192;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, 0, 512, 192);
+
+  if (stripeColor) {
+    ctx.fillStyle = stripeColor;
+    ctx.fillRect(16, 24, 480, 144);
+  }
+
+  ctx.strokeStyle = '#09090b';
+  ctx.lineWidth = 16;
+  ctx.strokeRect(8, 8, 496, 176);
+
+  ctx.fillStyle = textColor;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '900 64px "Barlow Condensed", "Impact", sans-serif';
+  ctx.fillText(text, 256, subtitle ? 76 : 98);
+
+  if (subtitle) {
+    ctx.font = '800 26px "Plus Jakarta Sans", sans-serif';
+    ctx.fillText(subtitle, 256, 138);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/**
+ * Builds a 2D/3D yellow comic-book Starburst ("BAM!" / "POW!" kick impact star with black outline).
+ */
+export function createComicStarburstMesh(): THREE.Group {
+  const group = new THREE.Group();
+
+  const createStarShape = (outerR: number, innerR: number, points = 10) => {
+    const shape = new THREE.Shape();
+    for (let i = 0; i < points * 2; i++) {
+      const r = i % 2 === 0 ? outerR : innerR;
+      const angle = (i / (points * 2)) * Math.PI * 2;
+      const x = Math.cos(angle) * r;
+      const y = Math.sin(angle) * r;
+      if (i === 0) shape.moveTo(x, y);
+      else shape.lineTo(x, y);
+    }
+    shape.closePath();
+    return shape;
+  };
+
+  const blackGeo = new THREE.ShapeGeometry(createStarShape(1.18, 0.52, 9));
+  const blackMat = new THREE.MeshBasicMaterial({
+    color: 0x09090b,
+    side: THREE.DoubleSide,
+    depthTest: false,
+  });
+  const blackStar = new THREE.Mesh(blackGeo, blackMat);
+  blackStar.renderOrder = 10;
+  group.add(blackStar);
+
+  const yellowGeo = new THREE.ShapeGeometry(createStarShape(0.95, 0.38, 9));
+  const yellowMat = new THREE.MeshBasicMaterial({
+    color: 0xfacc15,
+    side: THREE.DoubleSide,
+    depthTest: false,
+  });
+  const yellowStar = new THREE.Mesh(yellowGeo, yellowMat);
+  yellowStar.position.z = 0.01;
+  yellowStar.renderOrder = 11;
+  group.add(yellowStar);
+
+  const coreGeo = new THREE.ShapeGeometry(createStarShape(0.45, 0.18, 9));
+  const coreMat = new THREE.MeshBasicMaterial({
+    color: 0xfef9c3,
+    side: THREE.DoubleSide,
+    depthTest: false,
+  });
+  const coreStar = new THREE.Mesh(coreGeo, coreMat);
+  coreStar.position.z = 0.02;
+  coreStar.renderOrder = 12;
+  group.add(coreStar);
+
+  group.visible = false;
+  return group;
 }
 
 export function createBallTexture(profileId: BallProfileId, maxAnisotropy: number): THREE.CanvasTexture {
@@ -23,9 +194,9 @@ export function createBallTexture(profileId: BallProfileId, maxAnisotropy: numbe
   ctx.fillRect(0, 0, 256, 256);
 
   if (profileId === 'supersantos') {
-    // Classic Super Santos black meridian bands & pentagon panels
-    ctx.strokeStyle = '#18181b';
-    ctx.lineWidth = 10;
+    // Classic orange Super Santos with crisp black meridians & equator
+    ctx.strokeStyle = '#09090b';
+    ctx.lineWidth = 12;
     for (let i = 0; i < 4; i++) {
       const x = 32 + i * 64;
       ctx.beginPath();
@@ -37,16 +208,9 @@ export function createBallTexture(profileId: BallProfileId, maxAnisotropy: numbe
     ctx.moveTo(0, 128);
     ctx.lineTo(256, 128);
     ctx.stroke();
-
-    // Subtle specular cel highlight
-    const grad = ctx.createRadialGradient(90, 90, 10, 128, 128, 120);
-    grad.addColorStop(0, 'rgba(255,255,255,0.22)');
-    grad.addColorStop(1, 'rgba(0,0,0,0.12)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 256, 256);
   } else if (profileId === 'classico') {
-    // 32-panel black pentagons on warm white leather
-    ctx.fillStyle = '#18181b';
+    // Realistic Telstar pentagons + hex seams in graphic-novel ink
+    ctx.fillStyle = '#09090b';
     const spots = [
       [64, 64],
       [192, 64],
@@ -56,28 +220,38 @@ export function createBallTexture(profileId: BallProfileId, maxAnisotropy: numbe
     ];
     for (const [cx, cy] of spots) {
       ctx.beginPath();
-      ctx.arc(cx, cy, 26, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 28, 0, Math.PI * 2);
       ctx.fill();
     }
-    ctx.strokeStyle = '#475569';
-    ctx.lineWidth = 4;
-    ctx.strokeRect(8, 8, 240, 240);
+    ctx.strokeStyle = '#09090b';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(64, 64);
+    ctx.lineTo(128, 128);
+    ctx.lineTo(192, 64);
+    ctx.moveTo(64, 192);
+    ctx.lineTo(128, 128);
+    ctx.lineTo(192, 192);
+    ctx.stroke();
   } else if (profileId === 'bagnato') {
-    // Muddy waterlogged leather patches
-    ctx.fillStyle = '#292524';
-    for (let i = 0; i < 14; i++) {
+    // Mud/water-soaked leather panels
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 8;
+    ctx.strokeRect(16, 16, 224, 224);
+    ctx.fillStyle = '#09090b';
+    for (let i = 0; i < 10; i++) {
       ctx.beginPath();
-      ctx.arc((i * 53) % 240, (i * 89) % 240, 18 + (i % 3) * 8, 0, Math.PI * 2);
+      ctx.arc((i * 53) % 240, (i * 89) % 240, 14 + (i % 3) * 7, 0, Math.PI * 2);
       ctx.fill();
     }
   } else {
-    // Bucato: scuffed, wrinkled appearance with dark gash
-    ctx.fillStyle = '#27272a';
-    ctx.fillRect(90, 110, 75, 16);
-    ctx.strokeStyle = '#713f12';
-    ctx.lineWidth = 6;
+    // Bucato: slashed patch and seam gash
+    ctx.fillStyle = '#09090b';
+    ctx.fillRect(85, 108, 86, 20);
+    ctx.strokeStyle = '#09090b';
+    ctx.lineWidth = 10;
     ctx.beginPath();
-    ctx.moveTo(20, 40);
+    ctx.moveTo(30, 40);
     ctx.lineTo(220, 210);
     ctx.stroke();
   }
@@ -88,72 +262,152 @@ export function createBallTexture(profileId: BallProfileId, maxAnisotropy: numbe
   return tex;
 }
 
-export function createPitchTexture(pitchId: PitchId, maxAnisotropy: number): THREE.CanvasTexture {
+export function createPitchTexture(
+  pitchId: PitchId,
+  teamSize: TeamSize,
+  maxAnisotropy: number,
+): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   const cfg = PITCH_CONFIGS[pitchId];
 
   if (pitchId === 'spiaggia') {
-    // Texture sabbia leggera max 256x256 ripetuta (RepeatWrapping)
     canvas.width = 256;
     canvas.height = 256;
     const ctx = canvas.getContext('2d')!;
     ctx.fillStyle = cfg.groundColor;
     ctx.fillRect(0, 0, 256, 256);
 
-    // Granelli di sabbia e leggere ondulazioni dorate
-    for (let i = 0; i < 420; i++) {
-      const x = (i * 73) % 256;
-      const y = (i * 137) % 256;
-      const w = 3 + (i % 7);
-      ctx.fillStyle = i % 2 === 0 ? 'rgba(255,250,220,0.09)' : 'rgba(160,115,55,0.08)';
-      ctx.fillRect(x, y, w, 2);
+    // Subtle wind-rippled sand dunes in graphic-novel ink
+    ctx.strokeStyle = 'rgba(120, 53, 15, 0.14)';
+    ctx.lineWidth = 3;
+    for (let y = 32; y < 256; y += 48) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.quadraticCurveTo(128, y + 10, 256, y);
+      ctx.stroke();
     }
 
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(4, 3);
+    tex.repeat.set(6, 4);
     tex.anisotropy = maxAnisotropy;
     return tex;
   }
 
-  canvas.width = 512;
-  canvas.height = 512;
+  canvas.width = 1024;
+  canvas.height = 680;
   const ctx = canvas.getContext('2d')!;
+  const dims = getEffectivePitchDimensions(pitchId, teamSize);
 
-  // Base surface
   ctx.fillStyle = cfg.groundColor;
-  ctx.fillRect(0, 0, 512, 512);
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Painterly Celestini texture grain & cobblestone/asphalt wear
-  for (let i = 0; i < 600; i++) {
-    const x = (i * 97) % 512;
-    const y = (i * 151) % 512;
-    const w = 6 + (i % 14);
-    ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.05)';
-    ctx.fillRect(x, y, w, w);
+  if (pitchId === 'stadio') {
+    // Alternating mowed grass stripes for realistic stadium feel
+    const stripes = 14;
+    const stripeW = canvas.width / stripes;
+    for (let i = 0; i < stripes; i++) {
+      ctx.fillStyle = i % 2 === 0 ? '#22c55e' : '#16a34a';
+      ctx.fillRect(i * stripeW, 0, stripeW, canvas.height);
+    }
+  } else {
+    // Realistic pavement / courtyard tile / clay joints in comic ink
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.11)';
+    ctx.lineWidth = 3;
+    for (let x = 64; x < canvas.width; x += 64) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvas.height);
+      ctx.stroke();
+    }
+    for (let y = 64; y < canvas.height; y += 64) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
+    }
   }
 
-  // Hand-drawn chalk pitch lines ("gessetto da cortile")
-  ctx.strokeStyle = cfg.lineColor;
-  ctx.lineWidth = 6;
-  ctx.strokeRect(26, 26, 460, 460);
+  // Convert world meters to canvas pixels for exact penalty area & touchline alignment
+  const marginX = 32;
+  const marginZ = 32;
+  const fieldPxW = canvas.width - marginX * 2;
+  const fieldPxH = canvas.height - marginZ * 2;
 
-  // Midfield chalk line
-  ctx.beginPath();
-  ctx.moveTo(256, 26);
-  ctx.lineTo(256, 486);
-  ctx.stroke();
+  // Crisp graphic-novel pitch lines (white with dark comic border)
+  const drawPitchLines = (strokeStyle: string, lineWidth: number) => {
+    ctx.strokeStyle = strokeStyle;
+    ctx.lineWidth = lineWidth;
 
-  // Center circle
-  ctx.beginPath();
-  ctx.arc(256, 256, 58, 0, Math.PI * 2);
-  ctx.stroke();
+    // Outer touchlines & goal lines
+    ctx.strokeRect(marginX, marginZ, fieldPxW, fieldPxH);
 
-  // Penalty boxes
-  ctx.strokeRect(26, 156, 72, 200);
-  ctx.strokeRect(414, 156, 72, 200);
+    // Halfway line
+    ctx.beginPath();
+    ctx.moveTo(canvas.width / 2, marginZ);
+    ctx.lineTo(canvas.width / 2, canvas.height - marginZ);
+    ctx.stroke();
+
+    // Center circle
+    const centerR = Math.min(fieldPxW, fieldPxH) * 0.16;
+    ctx.beginPath();
+    ctx.arc(canvas.width / 2, canvas.height / 2, centerR, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Penalty boxes (scaled to match dims.boxDepth and dims.boxHalfW)
+    const boxPxW = (dims.boxDepth / (dims.halfX * 2)) * fieldPxW;
+    const boxPxH = ((dims.boxHalfW * 2) / (dims.halfZ * 2)) * fieldPxH;
+    const boxTopY = (canvas.height - boxPxH) / 2;
+
+    ctx.strokeRect(marginX, boxTopY, boxPxW, boxPxH);
+    ctx.strokeRect(canvas.width - marginX - boxPxW, boxTopY, boxPxW, boxPxH);
+
+    // 6-yard goal boxes
+    const smallBoxW = boxPxW * 0.42;
+    const smallBoxH = boxPxH * 0.54;
+    const smallTopY = (canvas.height - smallBoxH) / 2;
+    ctx.strokeRect(marginX, smallTopY, smallBoxW, smallBoxH);
+    ctx.strokeRect(canvas.width - marginX - smallBoxW, smallTopY, smallBoxW, smallBoxH);
+
+    // Penalty arcs ("D")
+    ctx.beginPath();
+    ctx.arc(marginX + boxPxW * 0.75, canvas.height / 2, boxPxH * 0.24, -0.65, 0.65);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(
+      canvas.width - marginX - boxPxW * 0.75,
+      canvas.height / 2,
+      boxPxH * 0.24,
+      Math.PI - 0.65,
+      Math.PI + 0.65,
+    );
+    ctx.stroke();
+  };
+
+  // Draw black comic outline under white chalk lines
+  drawPitchLines('#09090b', 14);
+  drawPitchLines(cfg.lineColor, 8);
+
+  // Penalty spots & center spot
+  const boxPxW = (dims.boxDepth / (dims.halfX * 2)) * fieldPxW;
+  const spots = [
+    [canvas.width / 2, canvas.height / 2],
+    [marginX + boxPxW * 0.72, canvas.height / 2],
+    [canvas.width - marginX - boxPxW * 0.72, canvas.height / 2],
+  ];
+  spots.forEach(([sx, sy]) => {
+    ctx.fillStyle = '#09090b';
+    ctx.beginPath();
+    ctx.arc(sx, sy, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(sx, sy, 5, 0, Math.PI * 2);
+    ctx.fill();
+  });
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -163,8 +417,8 @@ export function createPitchTexture(pitchId: PitchId, maxAnisotropy: number): THR
 
 export interface PlayerRig {
   root: THREE.Group;
-  upperBodyGroup: THREE.Group; // Hidden in FPS mode for the active player!
-  legsGroup: THREE.Group; // Kept visible in FPS mode so you see your own boots kick!
+  upperBodyGroup: THREE.Group;
+  legsGroup: THREE.Group;
   leftLeg: THREE.Group;
   rightLeg: THREE.Group;
   leftArm: THREE.Group;
@@ -173,138 +427,297 @@ export interface PlayerRig {
   selectionRing: THREE.Mesh;
 }
 
+function createJerseyNumberTexture(
+  jerseyHex: string,
+  trimHex: string,
+  number: number,
+): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.fillStyle = jerseyHex;
+  ctx.fillRect(0, 0, 256, 256);
+
+  // Vertical graphic-novel sport stripe & collar trim
+  ctx.fillStyle = trimHex;
+  ctx.fillRect(0, 0, 256, 24);
+  ctx.fillRect(0, 232, 256, 24);
+
+  // Bold number on both back and chest of the cylinder UV
+  ctx.font = '900 92px "Barlow Condensed", "Impact", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 10;
+  ctx.strokeStyle = '#09090b';
+  ctx.fillStyle = '#ffffff';
+
+  const numStr = String(number);
+  ctx.strokeText(numStr, 64, 128);
+  ctx.fillText(numStr, 64, 128);
+  ctx.strokeText(numStr, 192, 128);
+  ctx.fillText(numStr, 192, 128);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 /**
- * Builds a 10-part articulated procedural Street Footballer in "Compagnia dei Celestini" stylized aesthetic.
- * Pivoted at bottom-center (y = 0 sits flush on the ground).
+ * Builds a Realistic Proportioned Human Footballer in Graphic-Novel / Comic-Book Cel-Shaded style:
+ * - Realistic athletic proportions, skin tone, hair style, facial features (eyes, eyebrows, nose, ears)
+ * - Numbered football jersey with collar and sleeves, athletic shorts, team socks, football cleats
+ * - Goalkeeper variant wears distinct GK kit + oversized padded Goalkeeper Gloves
+ * - Every mesh has a crisp black comic-book outline
  */
 export function createStreetPlayerModel(
   team: 'blue' | 'red',
   number: number,
   isControlled: boolean,
+  isGoalkeeper = false,
 ): PlayerRig {
   const root = new THREE.Group();
   const upperBodyGroup = new THREE.Group();
   const legsGroup = new THREE.Group();
 
-  const jerseyColor = team === 'blue' ? 0x0284c7 : 0xe11d48;
-  const trimColor = team === 'blue' ? 0xfbbf24 : 0xfef08a;
-  const shortsColor = team === 'blue' ? 0x0f172a : 0x18181b;
-  const skinColor = number % 2 === 0 ? 0xf1c27d : 0xd2996c;
-  const shoeColor = team === 'blue' ? 0xf59e0b : 0x38bdf8;
+  // Skin & hair palette varied realistically by player number
+  const skinPalette = [0xf1c27d, 0xe0ac69, 0xc68642, 0x8d5524];
+  const hairPalette = [0x18181b, 0x451a03, 0x78350f, 0xd97706];
+  const skinColor = skinPalette[Math.abs(number) % skinPalette.length];
+  const hairColor = hairPalette[Math.abs(number * 3) % hairPalette.length];
 
-  const skinMat = new THREE.MeshStandardMaterial({ color: skinColor, roughness: 0.65, metalness: 0.05 });
-  const jerseyMat = new THREE.MeshStandardMaterial({ color: jerseyColor, roughness: 0.8, metalness: 0.05 });
-  const trimMat = new THREE.MeshStandardMaterial({ color: trimColor, roughness: 0.5, metalness: 0.25 });
-  const shortsMat = new THREE.MeshStandardMaterial({ color: shortsColor, roughness: 0.85, metalness: 0.05 });
-  const shoeMat = new THREE.MeshStandardMaterial({ color: shoeColor, roughness: 0.35, metalness: 0.2 });
+  const jerseyHex = isGoalkeeper
+    ? team === 'blue'
+      ? '#84cc16' // Neon lime GK kit
+      : '#f59e0b' // Amber gold GK kit
+    : team === 'blue'
+      ? '#0284c7' // Azzurri / Street Blue kit
+      : '#e11d48'; // Crimson Red kit
 
-  // 1. Contact shadow + Active player indicator ring at y = 0.02
-  const ringGeo = new THREE.RingGeometry(0.45, 0.62, 24);
+  const trimHex = isControlled ? '#facc15' : '#ffffff';
+  const shortsColor = isGoalkeeper
+    ? 0x18181b
+    : team === 'blue'
+      ? 0x0f172a
+      : 0x1e293b;
+  const sockColor = isGoalkeeper
+    ? team === 'blue'
+      ? 0x84cc16
+      : 0xf59e0b
+    : team === 'blue'
+      ? 0x38bdf8
+      : 0xf43f5e;
+
+  const skinMat = createToonMaterial(skinColor);
+  const hairMat = createToonMaterial(hairColor);
+  const jerseyTex = createJerseyNumberTexture(jerseyHex, trimHex, number);
+  const jerseyMat = createToonMaterial(0xffffff, jerseyTex);
+  const jerseyPlainMat = createToonMaterial(jerseyHex);
+  const shortsMat = createToonMaterial(shortsColor);
+  const sockMat = createToonMaterial(sockColor);
+  const bootMat = createToonMaterial(isControlled ? 0xfacc15 : 0x18181b);
+  const gloveMat = createToonMaterial(0xfef08a);
+  const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const pupilMat = new THREE.MeshBasicMaterial({ color: 0x09090b });
+
+  // 1. Tactical Selection Ring on Ground
+  const ringGeo = new THREE.RingGeometry(0.46, 0.64, 24);
   ringGeo.rotateX(-Math.PI / 2);
   const ringMat = new THREE.MeshBasicMaterial({
     color: isControlled ? 0xfacc15 : team === 'blue' ? 0x38bdf8 : 0xf43f5e,
-    transparent: true,
-    opacity: isControlled ? 0.9 : 0.35,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
   });
   const selectionRing = new THREE.Mesh(ringGeo, ringMat);
-  selectionRing.position.y = 0.02;
+  selectionRing.position.y = 0.022;
   root.add(selectionRing);
 
-  // Soft Ground Contact Shadow
+  // Hard-Edge Graphic-Novel Ground Contact Shadow
   const shadowGeo = new THREE.CircleGeometry(0.48, 16);
   shadowGeo.rotateX(-Math.PI / 2);
   const shadowMat = new THREE.MeshBasicMaterial({
-    color: 0x000000,
+    color: 0x09090b,
     transparent: true,
-    opacity: 0.42,
-    depthWrite: false,
+    opacity: 0.45,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
   });
   const contactShadow = new THREE.Mesh(shadowGeo, shadowMat);
   contactShadow.position.y = 0.015;
   root.add(contactShadow);
 
-  // 2. Left & Right Articulated Legs (Hip pivot at y = 0.78)
+  // 2. Realistic Athletic Legs (Shorts thigh + Knee + Team Sock + Studded Football Boot)
   const makeLeg = (offsetX: number) => {
     const legPivot = new THREE.Group();
-    legPivot.position.set(offsetX, 0.78, 0);
+    legPivot.position.set(offsetX, 0.82, 0);
 
-    const shortThigh = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.12, 0.34, 10), shortsMat);
-    shortThigh.position.y = -0.15;
-    shortThigh.castShadow = true;
-    legPivot.add(shortThigh);
+    // Shorts leg cuff
+    const thighShort = new THREE.Mesh(new THREE.CylinderGeometry(0.125, 0.11, 0.28, 10), shortsMat);
+    thighShort.position.y = -0.14;
+    thighShort.castShadow = true;
+    addComicOutline(thighShort, 1.09);
+    legPivot.add(thighShort);
 
-    const calf = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.08, 0.36, 10), skinMat);
-    calf.position.y = -0.45;
-    calf.castShadow = true;
-    legPivot.add(calf);
+    // Exposed athletic knee/thigh skin
+    const knee = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.088, 0.18, 10), skinMat);
+    knee.position.y = -0.35;
+    knee.castShadow = true;
+    addComicOutline(knee, 1.1);
+    legPivot.add(knee);
 
-    // Street Sneaker with stripe
-    const boot = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.14, 0.34), shoeMat);
-    boot.position.set(0, -0.71, -0.06);
+    // High football sock with shin-guard volume
+    const sock = new THREE.Mesh(new THREE.CylinderGeometry(0.092, 0.075, 0.32, 10), sockMat);
+    sock.position.y = -0.58;
+    sock.castShadow = true;
+    addComicOutline(sock, 1.1);
+    legPivot.add(sock);
+
+    // Realistic Football Cleat / Boot
+    const boot = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.34), bootMat);
+    boot.position.set(0, -0.76, 0.06);
     boot.castShadow = true;
+    addBoxOutline(boot, 1.06);
     legPivot.add(boot);
 
     return legPivot;
   };
 
-  const leftLeg = makeLeg(-0.17);
-  const rightLeg = makeLeg(0.17);
+  const leftLeg = makeLeg(-0.14);
+  const rightLeg = makeLeg(0.14);
   legsGroup.add(leftLeg, rightLeg);
   root.add(legsGroup);
 
-  // 3. Torso / Street Jersey (Primary Silhouette)
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.68, 0.32), jerseyMat);
-  torso.position.y = 1.14;
+  // 3. Pelvis / Shorts Hip Block
+  const pelvis = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.22, 12), shortsMat);
+  pelvis.scale.set(1.05, 1, 0.78);
+  pelvis.position.y = 0.88;
+  pelvis.castShadow = true;
+  addComicOutline(pelvis, 1.07);
+  upperBodyGroup.add(pelvis);
+
+  // 4. Athletic V-Taper Torso with Numbered Jersey
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.21, 0.56, 12), jerseyMat);
+  torso.scale.set(1.08, 1, 0.74);
+  torso.position.y = 1.24;
   torso.castShadow = true;
+  addComicOutline(torso, 1.07);
   upperBodyGroup.add(torso);
 
-  // Collar / Chest Stripe Accent
-  const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.14, 0.34), trimMat);
-  stripe.position.y = 1.24;
-  upperBodyGroup.add(stripe);
+  // Collar + Neck
+  const collar = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.13, 0.15, 0.08, 10),
+    createToonMaterial(isControlled ? 0xfacc15 : 0xffffff),
+  );
+  collar.position.y = 1.53;
+  addComicOutline(collar, 1.08);
+  upperBodyGroup.add(collar);
 
-  // 4. Left & Right Articulated Arms (Shoulder pivot at y = 1.42)
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.095, 0.12, 10), skinMat);
+  neck.position.y = 1.6;
+  addComicOutline(neck, 1.1);
+  upperBodyGroup.add(neck);
+
+  // 5. Realistic Articulated Arms (Jersey Sleeve + Forearm + Hand / Goalkeeper Glove)
   const makeArm = (offsetX: number) => {
     const armPivot = new THREE.Group();
-    armPivot.position.set(offsetX, 1.42, 0);
+    armPivot.position.set(offsetX, 1.46, 0);
 
-    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.09, 0.24, 8), jerseyMat);
-    sleeve.position.y = -0.1;
+    // Jersey short sleeve
+    const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.095, 0.085, 0.24, 10), jerseyPlainMat);
+    sleeve.position.y = -0.11;
+    sleeve.castShadow = true;
+    addComicOutline(sleeve, 1.1);
     armPivot.add(sleeve);
 
-    const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.07, 0.36, 8), skinMat);
-    forearm.position.y = -0.36;
+    // Forearm skin
+    const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.065, 0.28, 10), skinMat);
+    forearm.position.y = -0.35;
+    forearm.castShadow = true;
+    addComicOutline(forearm, 1.12);
     armPivot.add(forearm);
+
+    if (isGoalkeeper) {
+      // Oversized Padded Goalkeeper Glove
+      const glove = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.18, 0.16), gloveMat);
+      glove.position.y = -0.54;
+      addBoxOutline(glove, 1.08);
+      armPivot.add(glove);
+    } else {
+      // Realistic closed/athletic hand
+      const hand = new THREE.Mesh(new THREE.SphereGeometry(0.072, 8, 8), skinMat);
+      hand.position.y = -0.52;
+      addComicOutline(hand, 1.12);
+      armPivot.add(hand);
+    }
 
     return armPivot;
   };
 
-  const leftArm = makeArm(-0.36);
-  const rightArm = makeArm(0.36);
+  const leftArm = makeArm(-0.31);
+  const rightArm = makeArm(0.31);
   upperBodyGroup.add(leftArm, rightArm);
 
-  // 5. Stylized Celestini Head + Hair + Street Headband
+  // 6. Realistic Human Head with Sculpted Hair, Nose, Ears, Brows & Eyes
   const headGroup = new THREE.Group();
-  headGroup.position.y = 1.68;
+  headGroup.position.y = 1.77;
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 14, 12), skinMat);
-  head.castShadow = true;
-  headGroup.add(head);
+  const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.21, 14, 12), skinMat);
+  cranium.scale.set(0.95, 1.08, 0.98);
+  cranium.castShadow = true;
+  addComicOutline(cranium, 1.08);
+  headGroup.add(cranium);
 
-  const hairMat = new THREE.MeshStandardMaterial({
-    color: number % 3 === 0 ? 0x1c1917 : number % 3 === 1 ? 0x451a03 : 0x92400e,
-    roughness: 0.9,
+  // Sculpted Hair Cap + Front Fringe
+  const hairCap = new THREE.Mesh(
+    new THREE.SphereGeometry(0.22, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.58),
+    hairMat,
+  );
+  hairCap.position.y = 0.02;
+  hairCap.rotation.x = -0.18;
+  addComicOutline(hairCap, 1.07);
+  headGroup.add(hairCap);
+
+  // Athletic sweatband for controlled player or GK
+  if (isControlled || isGoalkeeper) {
+    const band = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.212, 0.212, 0.055, 14),
+      createToonMaterial(isControlled ? 0xfacc15 : 0x84cc16),
+    );
+    band.position.y = 0.07;
+    addComicOutline(band, 1.06);
+    headGroup.add(band);
+  }
+
+  // Realistic Nose & Ears
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.032, 0.08, 6), skinMat);
+  nose.rotation.x = Math.PI / 2;
+  nose.position.set(0, -0.01, 0.21);
+  headGroup.add(nose);
+
+  [-0.2, 0.2].forEach((ex) => {
+    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 6), skinMat);
+    ear.position.set(ex, -0.01, 0);
+    headGroup.add(ear);
   });
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.23, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.58), hairMat);
-  hair.position.y = 0.03;
-  headGroup.add(hair);
 
-  const headband = new THREE.Mesh(new THREE.CylinderGeometry(0.225, 0.225, 0.06, 14), trimMat);
-  headband.position.y = 0.07;
-  headGroup.add(headband);
+  // Expressive Graphic-Novel Eyes, Pupils & Eyebrows on front (+Z)
+  [-0.072, 0.072].forEach((ex, i) => {
+    const sclera = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.032, 0.02), whiteMat);
+    sclera.position.set(ex, 0.03, 0.195);
+    headGroup.add(sclera);
+
+    const pupil = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.028, 0.024), pupilMat);
+    pupil.position.set(ex, 0.03, 0.2);
+    headGroup.add(pupil);
+
+    const brow = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.018, 0.024), hairMat);
+    brow.position.set(ex, 0.062, 0.198);
+    brow.rotation.z = i === 0 ? -0.12 : 0.12;
+    headGroup.add(brow);
+  });
 
   upperBodyGroup.add(headGroup);
   root.add(upperBodyGroup);
@@ -341,7 +754,7 @@ export interface SeagullRig {
 
 export interface CourtyardEnvironmentRefs {
   group: THREE.Group;
-  groundMat: THREE.MeshStandardMaterial;
+  groundMat: THREE.MeshToonMaterial;
   windowGlassMesh: THREE.Mesh;
   shardsGroup: THREE.Group;
   carGroup: THREE.Group;
@@ -353,83 +766,144 @@ export interface CourtyardEnvironmentRefs {
 }
 
 /**
- * Builds the nostalgic Street Pitch or Beach Environment with low-poly procedural primitives.
+ * Builds the Realistic Comic-Book / Graphic-Novel Environment scaled to the active pitch & teamSize:
+ * - Distinct realistic dimensions (`dims.halfX`, `dims.halfZ`, `dims.goalHalfW`)
+ * - 6 unique architectures: Cortile Condominiale, Asfalto di Strada, Gabbia Metallica, Campo Parrocchiale, Spiaggia Costiera, and Stadio Cittadino (11v11)
  */
 export function buildCourtyardEnvironment(
   pitchId: PitchId,
+  teamSize: TeamSize,
   maxAnisotropy: number,
 ): CourtyardEnvironmentRefs {
   const group = new THREE.Group();
   const pitchCfg = PITCH_CONFIGS[pitchId];
+  const dims = getEffectivePitchDimensions(pitchId, teamSize);
   const isBeach = pitchId === 'spiaggia';
+  const isStadium = pitchId === 'stadio';
+  const isCage = pitchId === 'gabbia';
 
-  // Field Dimensions: 32m long (X: -16 to +16), 20m wide (Z: -10 to +10)
-  const pitchTex = createPitchTexture(pitchId, maxAnisotropy);
-  const groundGeo = new THREE.PlaneGeometry(32, 20);
+  const fieldLen = dims.halfX * 2 + 1.0;
+  const fieldWid = dims.halfZ * 2 + 0.8;
+
+  // 1. Field Surface scaled to exact effective dimensions
+  const pitchTex = createPitchTexture(pitchId, teamSize, maxAnisotropy);
+  const groundGeo = new THREE.PlaneGeometry(fieldLen, fieldWid);
   groundGeo.rotateX(-Math.PI / 2);
-  const groundMat = new THREE.MeshStandardMaterial({
-    map: pitchTex,
-    roughness: isBeach ? 0.96 : 0.88,
-    metalness: 0.02,
-  });
+  const groundMat = createToonMaterial(0xffffff, pitchTex);
   const ground = new THREE.Mesh(groundGeo, groundMat);
   ground.receiveShadow = true;
   group.add(ground);
 
-  // If on beach, draw simple sand-furrow lines on top of the repeated 256x256 sand texture
   if (isBeach) {
-    const sandLineMat = new THREE.MeshBasicMaterial({
-      color: 0xfef9c3,
-      transparent: true,
-      opacity: 0.45,
-    });
+    // Tape boundary lines on the sand
+    const sandLineMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
     const addLine = (w: number, h: number, x: number, z: number) => {
       const g = new THREE.PlaneGeometry(w, h);
       g.rotateX(-Math.PI / 2);
       const m = new THREE.Mesh(g, sandLineMat);
-      m.position.set(x, 0.012, z);
+      m.position.set(x, 0.015, z);
       group.add(m);
     };
-    addLine(30.8, 0.14, 0, -9.2);
-    addLine(30.8, 0.14, 0, 9.2);
-    addLine(0.14, 18.4, -15.4, 0);
-    addLine(0.14, 18.4, 15.4, 0);
-    addLine(0.14, 18.4, 0, 0);
+    addLine(dims.halfX * 2, 0.16, 0, -dims.halfZ);
+    addLine(dims.halfX * 2, 0.16, 0, dims.halfZ);
+    addLine(0.16, dims.halfZ * 2, -dims.halfX, 0);
+    addLine(0.16, dims.halfZ * 2, dims.halfX, 0);
+    addLine(0.16, dims.halfZ * 2, 0, 0);
   }
 
-  // Outer Surrounding Sidewalk / Beach Sand Apron
-  const apronGeo = new THREE.PlaneGeometry(80, 60);
+  // 2. Outer Surrounding Apron
+  const apronGeo = new THREE.PlaneGeometry(180, 150);
   apronGeo.rotateX(-Math.PI / 2);
-  const apronMat = new THREE.MeshStandardMaterial({
-    color: isBeach ? 0xdcbe82 : pitchId === 'terra' ? 0x57534e : 0x27272a,
-    roughness: 0.95,
-  });
+  const apronMat = createToonMaterial(
+    isBeach ? 0xf3d79b : isStadium ? 0x15803d : 0xd6d3d1,
+  );
   const apron = new THREE.Mesh(apronGeo, apronMat);
   apron.position.y = -0.03;
   apron.receiveShadow = true;
   group.add(apron);
 
-  // Low Perimeter Courtyard Bounce Curbs / Beach Driftwood Boardwalk
-  const curbMat = new THREE.MeshStandardMaterial({
-    color: isBeach ? 0xb48a5a : 0xa8a29e,
-    roughness: 0.85,
+  // 3. Distant Hills & Graphic-Novel Clouds on the Horizon
+  const hillsData: Array<{ x: number; z: number; r: number; sy: number; color: number }> = [
+    { x: -45, z: -dims.halfZ - 32, r: 22, sy: 0.65, color: 0x4ade80 },
+    { x: -12, z: -dims.halfZ - 38, r: 26, sy: 0.62, color: 0x86efac },
+    { x: 24, z: -dims.halfZ - 36, r: 24, sy: 0.6, color: 0x4ade80 },
+    { x: 52, z: -dims.halfZ - 30, r: 28, sy: 0.66, color: 0xa78bfa },
+  ];
+  hillsData.forEach((h) => {
+    const hillGeo = new THREE.SphereGeometry(h.r, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.55);
+    const hillMesh = new THREE.Mesh(hillGeo, createToonMaterial(h.color));
+    hillMesh.scale.set(1, h.sy, 0.75);
+    hillMesh.position.set(h.x, -0.5, h.z);
+    addComicOutline(hillMesh, 1.03);
+    group.add(hillMesh);
   });
-  const northCurb = new THREE.Mesh(new THREE.BoxGeometry(32.8, isBeach ? 0.45 : 0.7, 0.5), curbMat);
-  northCurb.position.set(0, isBeach ? 0.225 : 0.35, -10.25);
-  northCurb.receiveShadow = true;
+
+  const makeComicCloud = (cx: number, cy: number, cz: number, scale = 1.0) => {
+    const cloudGroup = new THREE.Group();
+    cloudGroup.position.set(cx, cy, cz);
+    cloudGroup.scale.setScalar(scale);
+    const cloudMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const puffs: Array<[number, number, number, number, number]> = [
+      [0, 0, 0, 2.8, 1.4],
+      [-2.2, -0.15, 0.1, 1.9, 1.15],
+      [2.2, -0.1, 0.1, 2.0, 1.2],
+      [-0.9, 0.55, 0.05, 1.7, 1.2],
+      [1.0, 0.45, 0.05, 1.6, 1.1],
+    ];
+    puffs.forEach(([px, py, pz, rx, ry]) => {
+      const puffGeo = new THREE.SphereGeometry(1, 12, 10);
+      const puff = new THREE.Mesh(puffGeo, cloudMat);
+      puff.scale.set(rx, ry, 0.55);
+      puff.position.set(px, py, pz);
+      addComicOutline(puff, 1.1);
+      cloudGroup.add(puff);
+    });
+    group.add(cloudGroup);
+  };
+  makeComicCloud(-16, 22, -dims.halfZ - 24, 1.2);
+  makeComicCloud(18, 24, -dims.halfZ - 26, 1.0);
+  makeComicCloud(-34, 20, -dims.halfZ - 14, 0.9);
+  makeComicCloud(34, 21, -dims.halfZ - 12, 0.95);
+
+  // 4. Perimeter Curbs & Trees
+  const curbMat = createToonMaterial(isBeach ? 0xfbbf24 : isStadium ? 0xffffff : 0x78716c);
+  const northCurb = new THREE.Mesh(
+    new THREE.BoxGeometry(fieldLen + 0.8, isBeach ? 0.35 : 0.55, 0.5),
+    curbMat,
+  );
+  northCurb.position.set(0, isBeach ? 0.175 : 0.275, -dims.halfZ - 0.45);
+  addBoxOutline(northCurb, 1.02);
   group.add(northCurb);
 
-  const southCurb = new THREE.Mesh(new THREE.BoxGeometry(32.8, isBeach ? 0.45 : 0.7, 0.5), curbMat);
-  southCurb.position.set(0, isBeach ? 0.225 : 0.35, 10.25);
-  southCurb.receiveShadow = true;
+  const southCurb = new THREE.Mesh(
+    new THREE.BoxGeometry(fieldLen + 0.8, isBeach ? 0.35 : 0.55, 0.5),
+    curbMat,
+  );
+  southCurb.position.set(0, isBeach ? 0.175 : 0.275, dims.halfZ + 0.45);
+  addBoxOutline(southCurb, 1.02);
   group.add(southCurb);
 
-  // Goalposts at X = -15.5 and X = +15.5, Z = -2.7 and Z = +2.7 (Goal width = 5.4m, height = 2.4m)
+  // If Gabbia Metallica: build tall graphic-novel steel wire cage enclosure around the pitch
+  if (isCage) {
+    const cageWireMat = new THREE.MeshBasicMaterial({
+      color: 0x18181b,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.42,
+    });
+    const northFence = new THREE.Mesh(new THREE.PlaneGeometry(fieldLen, 4.8, 24, 6), cageWireMat);
+    northFence.position.set(0, 2.4, -dims.halfZ - 0.45);
+    const southFence = new THREE.Mesh(new THREE.PlaneGeometry(fieldLen, 4.8, 24, 6), cageWireMat);
+    southFence.position.set(0, 2.4, dims.halfZ + 0.45);
+    group.add(northFence, southFence);
+  }
+
+  // 5. Goalposts placed dynamically at ±dims.halfX, ±dims.goalHalfW
   const goalPosts: THREE.Vector3[] = [
-    new THREE.Vector3(-15.5, 0, -2.7),
-    new THREE.Vector3(-15.5, 0, 2.7),
-    new THREE.Vector3(15.5, 0, -2.7),
-    new THREE.Vector3(15.5, 0, 2.7),
+    new THREE.Vector3(-dims.halfX, 0, -dims.goalHalfW),
+    new THREE.Vector3(-dims.halfX, 0, dims.goalHalfW),
+    new THREE.Vector3(dims.halfX, 0, -dims.goalHalfW),
+    new THREE.Vector3(dims.halfX, 0, dims.goalHalfW),
   ];
 
   goalPosts.forEach((pos, idx) => {
@@ -437,311 +911,429 @@ export function buildCourtyardEnvironment(
     postGroup.position.copy(pos);
 
     if (pitchCfg.goalpostStyle === 'giubbotti') {
-      const jacketColor = idx < 2 ? 0x0284c7 : 0xe11d48;
-      const bagMat = new THREE.MeshStandardMaterial({ color: jacketColor, roughness: 0.75 });
-      const sleeveMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.6 });
-
-      const baseBag = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.55, 0.65), bagMat);
+      const jacketColor = idx < 2 ? 0x38bdf8 : 0xf43f5e;
+      const baseBag = new THREE.Mesh(
+        new THREE.BoxGeometry(0.65, 0.55, 0.65),
+        createToonMaterial(jacketColor),
+      );
       baseBag.position.y = 0.275;
       baseBag.castShadow = true;
+      addBoxOutline(baseBag, 1.06);
       postGroup.add(baseBag);
 
-      const topJacket = new THREE.Mesh(new THREE.SphereGeometry(0.36, 10, 8), sleeveMat);
-      topJacket.scale.set(1, 0.7, 1);
+      const topJacket = new THREE.Mesh(
+        new THREE.SphereGeometry(0.36, 10, 8),
+        createToonMaterial(0xfacc15),
+      );
+      topJacket.scale.set(1, 0.72, 1);
       topJacket.position.y = 0.65;
-      topJacket.castShadow = true;
+      addComicOutline(topJacket, 1.1);
       postGroup.add(topJacket);
 
-      const markerMat = new THREE.MeshBasicMaterial({
-        color: idx < 2 ? 0x38bdf8 : 0xf43f5e,
-        transparent: true,
-        opacity: 0.28,
-      });
-      const heightPole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.3, 8), markerMat);
-      heightPole.position.y = 1.15;
+      const heightPole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.065, 0.065, 2.4, 8),
+        createToonMaterial(0xffffff),
+      );
+      heightPole.position.y = 1.2;
+      addComicOutline(heightPole, 1.16);
       postGroup.add(heightPole);
     } else if (pitchCfg.goalpostStyle === 'pietre') {
-      const stoneMat = new THREE.MeshStandardMaterial({ color: 0xd6d3d1, roughness: 0.92 });
-      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.45, 0), stoneMat);
-      rock.position.y = 0.35;
-      rock.castShadow = true;
-      postGroup.add(rock);
-    } else if (pitchCfg.goalpostStyle === 'ciabatte') {
-      // Porte da spiaggia fatte con secchiello rovesciato, ciabatta gigante e palo di legno leggero
-      const bucketColor = idx < 2 ? 0x0ea5e9 : 0xf43f5e;
-      const bucketMat = new THREE.MeshStandardMaterial({ color: bucketColor, roughness: 0.55 });
-      const strapMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.6 });
-      const bambooMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.85 });
+      const barrelColor = idx < 2 ? 0x38bdf8 : 0xf43f5e;
+      const barrel = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.3, 0.3, 0.8, 10),
+        createToonMaterial(barrelColor),
+      );
+      barrel.position.y = 0.4;
+      addComicOutline(barrel, 1.08);
+      postGroup.add(barrel);
 
-      // Secchiello da spiaggia rovesciato sulla sabbia
-      const bucket = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.34, 0.52, 8), bucketMat);
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.065, 0.065, 2.4, 8),
+        createToonMaterial(0xfacc15),
+      );
+      pole.position.y = 1.2;
+      addComicOutline(pole, 1.16);
+      postGroup.add(pole);
+    } else if (pitchCfg.goalpostStyle === 'ciabatte') {
+      const bucketColor = idx < 2 ? 0x38bdf8 : 0xf43f5e;
+      const bucket = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.26, 0.35, 0.52, 8),
+        createToonMaterial(bucketColor),
+      );
       bucket.position.y = 0.26;
-      bucket.castShadow = true;
+      addComicOutline(bucket, 1.09);
       postGroup.add(bucket);
 
-      // Ciabatta da mare poggiata accanto al secchiello
-      const flipFlopSole = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.08, 0.62), strapMat);
-      flipFlopSole.position.set(0, 0.04, idx % 2 === 0 ? 0.36 : -0.36);
-      postGroup.add(flipFlopSole);
-
-      const flipFlopStrap = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.1, 0.14), bucketMat);
-      flipFlopStrap.position.set(0, 0.1, idx % 2 === 0 ? 0.36 : -0.36);
-      postGroup.add(flipFlopStrap);
-
-      // Palo di legno piantato nel secchiello per indicare l'altezza porta in FPS/TV
-      const bambooPole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 2.3, 6), bambooMat);
-      bambooPole.position.y = 1.15;
-      bambooPole.castShadow = true;
+      const bambooPole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.06, 0.065, 2.4, 6),
+        createToonMaterial(0xf97316),
+      );
+      bambooPole.position.y = 1.2;
+      addComicOutline(bambooPole, 1.16);
       postGroup.add(bambooPole);
     } else {
-      const pipeMat = new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.45, metalness: 0.6 });
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 2.4, 10), pipeMat);
-      pole.position.y = 1.2;
-      pole.castShadow = true;
+      // Regulation white/metallic goalposts for Stadio, Gabbia, and Terra
+      const pipeMat = createToonMaterial(0xffffff);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 2.44, 12), pipeMat);
+      pole.position.y = 1.22;
+      addComicOutline(pole, 1.14);
       postGroup.add(pole);
     }
 
     group.add(postGroup);
   });
 
-  // Crossbars / visual net backstop
-  [-15.5, 15.5].forEach((gx, idx) => {
+  // Goal Crossbars & Back Nets scaled to dims.goalHalfW * 2
+  const goalWidth = dims.goalHalfW * 2;
+  [-dims.halfX, dims.halfX].forEach((gx, idx) => {
+    const frameMat = createToonMaterial(
+      isStadium ? 0xffffff : idx === 0 ? 0x38bdf8 : 0xf43f5e,
+    );
+    const crossbar = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, goalWidth + 0.16), frameMat);
+    crossbar.position.set(gx, 2.4, 0);
+    addBoxOutline(crossbar, 1.07);
+    group.add(crossbar);
+
     const netMat = new THREE.MeshBasicMaterial({
-      color: idx === 0 ? 0x38bdf8 : 0xf43f5e,
+      color: isStadium ? 0xf8fafc : 0x09090b,
       wireframe: true,
       transparent: true,
-      opacity: 0.22,
+      opacity: 0.38,
     });
-    const backNet = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.3, 5.4), netMat);
-    backNet.position.set(gx + (gx < 0 ? -0.55 : 0.55), 1.15, 0);
+    const backNet = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.4, goalWidth), netMat);
+    backNet.position.set(gx + (gx < 0 ? -0.7 : 0.7), 1.2, 0);
     group.add(backNet);
   });
 
-  const plasterMat = new THREE.MeshStandardMaterial({ color: 0xe09f67, roughness: 0.9 });
-  const roofMat = new THREE.MeshStandardMaterial({ color: 0x9c4127, roughness: 0.8 });
-  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.9 });
-
-  // Refs shared across all pitches
+  // Shared interactive Gag refs
   const signoraBalconyGroup = new THREE.Group();
-  const windowGlassMat = new THREE.MeshStandardMaterial({
-    color: 0x7dd3fc,
-    roughness: 0.15,
-    metalness: 0.4,
-    transparent: true,
-    opacity: 0.75,
-  });
+  const windowGlassMat = createToonMaterial(0x67e8f9);
   const windowGlassMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 2.2), windowGlassMat);
   const shardsGroup = new THREE.Group();
   const carGroup = new THREE.Group();
   const headlightMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
-  const hlLeft = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.22, 0.32), headlightMat);
-  const hlRight = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.22, 0.32), headlightMat);
+  const hlLeft = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.24, 0.34), headlightMat);
+  const hlRight = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.24, 0.34), headlightMat);
 
   if (isBeach) {
-    // SPIAGGIA: Mare come piano semplice sullo sfondo con un solo materiale colorato (niente shader/riflessi)
-    const seaGeo = new THREE.PlaneGeometry(110, 36);
+    // SPIAGGIA COSTIERA
+    const seaGeo = new THREE.PlaneGeometry(160, 48);
     seaGeo.rotateX(-Math.PI / 2);
-    const seaMat = new THREE.MeshStandardMaterial({
-      color: 0x0284c7,
-      roughness: 0.85,
-      metalness: 0.0,
-    });
-    const seaPlane = new THREE.Mesh(seaGeo, seaMat);
-    seaPlane.position.set(0, -0.015, -29.0);
+    const seaPlane = new THREE.Mesh(seaGeo, createToonMaterial(0x0ea5e9));
+    seaPlane.position.set(0, -0.015, -dims.halfZ - 24);
     group.add(seaPlane);
 
-    // Sottile striscia chiara di battigia (1 solo quad = 2 triangoli)
-    const foamGeo = new THREE.PlaneGeometry(90, 0.85);
+    const foamGeo = new THREE.PlaneGeometry(140, 1.1);
     foamGeo.rotateX(-Math.PI / 2);
-    const foamMesh = new THREE.Mesh(
-      foamGeo,
-      new THREE.MeshBasicMaterial({ color: 0xe0f2fe, transparent: true, opacity: 0.65 }),
-    );
-    foamMesh.position.set(0, 0.01, -11.2);
+    const foamMesh = new THREE.Mesh(foamGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    foamMesh.position.set(0, 0.012, -dims.halfZ - 1.4);
     group.add(foamMesh);
 
-    // 2 Cabine da spiaggia low-poly in legno (Nord-Ovest e Nord-Est)
-    const cabinWoodMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.85 });
-    const cabinDoorMat = new THREE.MeshStandardMaterial({ color: 0xfef3c7, roughness: 0.8 });
-    [-6.5, 6.5].forEach((cx) => {
+    const cabinMats = [createToonMaterial(0xf472b6), createToonMaterial(0x2dd4bf)];
+    [-7.5, 7.5].forEach((cx, idx) => {
       const beachCabin = new THREE.Group();
-      beachCabin.position.set(cx, 0, -11.8);
-
-      const box = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.6, 2.0), cabinWoodMat);
-      box.position.y = 1.3;
-      box.castShadow = true;
+      beachCabin.position.set(cx, 0, -dims.halfZ - 2.6);
+      const box = new THREE.Mesh(new THREE.BoxGeometry(2.5, 2.8, 2.2), cabinMats[idx]);
+      box.position.y = 1.4;
+      addBoxOutline(box, 1.04);
       beachCabin.add(box);
-
-      const door = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.9, 0.08), cabinDoorMat);
-      door.position.set(0, 1.0, 1.02);
-      beachCabin.add(door);
-
-      const cabinRoof = new THREE.Mesh(new THREE.ConeGeometry(1.75, 0.85, 4), roofMat);
+      const cabinRoof = new THREE.Mesh(
+        new THREE.ConeGeometry(2.0, 1.0, 4),
+        createToonMaterial(0x881337),
+      );
       cabinRoof.rotation.y = Math.PI / 4;
-      cabinRoof.position.y = 3.02;
+      cabinRoof.position.y = 3.25;
+      addComicOutline(cabinRoof, 1.06);
       beachCabin.add(cabinRoof);
-
       group.add(beachCabin);
     });
 
-    // 3 Ombrelloni da spiaggia low-poly (palo + cono a 8 spicchi)
-    const poleMat = new THREE.MeshStandardMaterial({ color: 0xf5f5f4, roughness: 0.5 });
-    const umbrellaColors = [0xf97316, 0x0ea5e9, 0xe11d48];
-    [-12.0, 0.0, 12.0].forEach((ux, i) => {
+    const umbrellaColors = [0xfacc15, 0xf472b6, 0x4ade80, 0x38bdf8];
+    [-14.0, -4.5, 4.5, 14.0].forEach((ux, i) => {
       const umbGroup = new THREE.Group();
-      umbGroup.position.set(ux, 0, -11.3);
-
-      const uPole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.7, 6), poleMat);
-      uPole.position.y = 1.35;
+      umbGroup.position.set(ux, 0, -dims.halfZ - 1.8);
+      const uPole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.06, 0.06, 2.8, 6),
+        createToonMaterial(0xffffff),
+      );
+      uPole.position.y = 1.4;
+      addComicOutline(uPole, 1.15);
       umbGroup.add(uPole);
-
-      const canopyMat = new THREE.MeshStandardMaterial({ color: umbrellaColors[i], roughness: 0.75 });
-      const canopy = new THREE.Mesh(new THREE.ConeGeometry(1.85, 0.7, 8), canopyMat);
-      canopy.position.y = 2.65;
-      canopy.castShadow = true;
+      const canopy = new THREE.Mesh(
+        new THREE.ConeGeometry(2.0, 0.82, 8),
+        createToonMaterial(umbrellaColors[i]),
+      );
+      canopy.position.y = 2.75;
+      addComicOutline(canopy, 1.06);
       umbGroup.add(canopy);
-
       group.add(umbGroup);
     });
+  } else if (isStadium) {
+    // STADIO CITTADINO (Regulation Grass Arena for 7v7 / 11v11 with Grandstands, Floodlights & Dugouts)
+    const standLen = fieldLen + 6;
+    const standMat = createToonMaterial(0x334155);
+    const seatRowBlue = createToonMaterial(0x0284c7);
+    const seatRowRed = createToonMaterial(0xe11d48);
+
+    // North & South Tiered Grandstands
+    [-1, 1].forEach((dir) => {
+      const standGroup = new THREE.Group();
+      standGroup.position.set(0, 0, dir * (dims.halfZ + 4.8));
+      for (let tier = 0; tier < 4; tier++) {
+        const tierMesh = new THREE.Mesh(
+          new THREE.BoxGeometry(standLen, 1.1, 1.6),
+          tier % 2 === 0 ? standMat : dir < 0 ? seatRowBlue : seatRowRed,
+        );
+        tierMesh.position.set(0, 0.55 + tier * 1.05, dir * tier * 1.45);
+        addBoxOutline(tierMesh, 1.02);
+        standGroup.add(tierMesh);
+      }
+      // Stadium roof canopy
+      const roof = new THREE.Mesh(
+        new THREE.BoxGeometry(standLen + 1, 0.4, 7.5),
+        createToonMaterial(0xf8fafc),
+      );
+      roof.position.set(0, 6.2, dir * 2.2);
+      addBoxOutline(roof, 1.02);
+      standGroup.add(roof);
+      group.add(standGroup);
+    });
+
+    // Advertising LED-style Comic Boards along North touchline
+    const banners = [
+      { text: 'OPEN STREET FOOTBALL', bg: '#facc15', fg: '#09090b', x: -14 },
+      { text: 'CALCIO VERO 11v11', bg: '#38bdf8', fg: '#09090b', x: 0 },
+      { text: 'SUPER SANTOS CUP', bg: '#f43f5e', fg: '#ffffff', x: 14 },
+    ];
+    banners.forEach((b) => {
+      const tex = createComicSignTexture(b.text, null, b.bg, b.fg);
+      const board = new THREE.Mesh(
+        new THREE.BoxGeometry(10.5, 1.1, 0.25),
+        new THREE.MeshBasicMaterial({ map: tex }),
+      );
+      board.position.set(b.x, 0.55, -dims.halfZ - 1.2);
+      addBoxOutline(board, 1.04);
+      group.add(board);
+    });
+
+    // 4 Towering Stadium Floodlight Pylons
+    [
+      [-dims.halfX - 4, -dims.halfZ - 4],
+      [dims.halfX + 4, -dims.halfZ - 4],
+      [-dims.halfX - 4, dims.halfZ + 4],
+      [dims.halfX + 4, dims.halfZ + 4],
+    ].forEach(([px, pz]) => {
+      const pylon = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.28, 0.42, 16, 8),
+        createToonMaterial(0x475569),
+      );
+      pylon.position.set(px, 8, pz);
+      addComicOutline(pylon, 1.06);
+      const lightPanel = new THREE.Mesh(
+        new THREE.BoxGeometry(2.6, 1.6, 0.4),
+        new THREE.MeshBasicMaterial({ color: 0xfef9c3 }),
+      );
+      lightPanel.position.set(px, 16.2, pz);
+      lightPanel.lookAt(0, 0, 0);
+      addBoxOutline(lightPanel, 1.05);
+      group.add(pylon, lightPanel);
+    });
   } else {
-    // CORTILE / STRADA / TERRA: Condominio, Balcone Signora Maria, Finestra, Tetto, Auto, Tombino
-    const mainPalazzo = new THREE.Mesh(new THREE.BoxGeometry(28, 9.5, 4), plasterMat);
-    mainPalazzo.position.set(0, 4.75, -12.8);
-    mainPalazzo.receiveShadow = true;
-    group.add(mainPalazzo);
+    // URBAN / COURTYARD / PARISH ARCHITECTURES (Cortile, Strada, Gabbia, Terra)
+    const northZ = -dims.halfZ - 3.2;
+    const southZ = dims.halfZ + 2.5;
 
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(28.6, 0.6, 5.2), roofMat);
-    roof.position.set(0, 9.6, -12.5);
-    roof.rotation.x = 0.18;
-    group.add(roof);
+    const yellowWallMat = createToonMaterial(0xfacc15);
+    const pinkWallMat = createToonMaterial(0xf472b6);
+    const maroonRoofMat = createToonMaterial(0x881337);
+    const wheelMat = createToonMaterial(0x18181b);
 
-    // GAG 1: Signora Maria's Balcony
-    signoraBalconyGroup.position.set(-8, 2.8, -10.4);
-    const railMat = new THREE.MeshStandardMaterial({ color: 0x27272a, metalness: 0.6, roughness: 0.4 });
-    const balconySlab = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.3, 1.6), curbMat);
-    const balconyRail = new THREE.Mesh(new THREE.BoxGeometry(4.2, 1.0, 1.6), railMat);
+    // West Apartment / Storefront Wing
+    const yellowWing = new THREE.Mesh(new THREE.BoxGeometry(16.5, 6.8, 4.8), yellowWallMat);
+    yellowWing.position.set(-8.2, 3.4, northZ);
+    addBoxOutline(yellowWing, 1.02);
+    group.add(yellowWing);
+
+    const yellowRoof = new THREE.Mesh(new THREE.BoxGeometry(17.2, 0.6, 5.4), maroonRoofMat);
+    yellowRoof.position.set(-8.2, 7.0, northZ);
+    addBoxOutline(yellowRoof, 1.03);
+    group.add(yellowRoof);
+
+    const rooftopSignTex = createComicSignTexture(
+      pitchId === 'strada' ? 'BAR SPORT' : pitchId === 'terra' ? 'ORATORIO SAN MARCO' : 'SUPER SANTOS',
+      null,
+      '#fde047',
+      '#09090b',
+    );
+    const rooftopSign = new THREE.Mesh(
+      new THREE.BoxGeometry(6.8, 1.55, 0.35),
+      new THREE.MeshBasicMaterial({ map: rooftopSignTex }),
+    );
+    rooftopSign.position.set(-8.2, 8.0, northZ + 1.8);
+    addBoxOutline(rooftopSign, 1.04);
+    group.add(rooftopSign);
+
+    // East Condominium Wing
+    const pinkWing = new THREE.Mesh(new THREE.BoxGeometry(16.5, 7.2, 5.0), pinkWallMat);
+    pinkWing.position.set(8.5, 3.6, northZ);
+    addBoxOutline(pinkWing, 1.02);
+    group.add(pinkWing);
+
+    const pinkRoof = new THREE.Mesh(new THREE.BoxGeometry(17.2, 0.7, 5.6), maroonRoofMat);
+    pinkRoof.position.set(8.5, 7.5, northZ);
+    addBoxOutline(pinkRoof, 1.03);
+    group.add(pinkRoof);
+
+    const cortileSignTex = createComicSignTexture(
+      pitchId === 'gabbia' ? 'GABBIA NORD' : 'CORTILE B',
+      null,
+      '#ffffff',
+      '#09090b',
+    );
+    const cortileSign = new THREE.Mesh(
+      new THREE.BoxGeometry(3.4, 1.0, 0.22),
+      new THREE.MeshBasicMaterial({ map: cortileSignTex }),
+    );
+    cortileSign.position.set(3.0, 4.9, northZ + 2.55);
+    addBoxOutline(cortileSign, 1.05);
+    group.add(cortileSign);
+
+    // GAG 1: Signora Maria's Balcony on the West Wing
+    signoraBalconyGroup.position.set(-8.0, 3.0, northZ + 2.6);
+    const balconySlab = new THREE.Mesh(
+      new THREE.BoxGeometry(4.2, 0.35, 1.6),
+      createToonMaterial(0xffffff),
+    );
+    addBoxOutline(balconySlab, 1.04);
+    const balconyRail = new THREE.Mesh(
+      new THREE.BoxGeometry(4.2, 1.0, 1.6),
+      createToonMaterial(0xf97316),
+    );
     balconyRail.position.y = 0.6;
+    addBoxOutline(balconyRail, 1.04);
     signoraBalconyGroup.add(balconySlab, balconyRail);
 
     const mariaDress = new THREE.Mesh(
       new THREE.CylinderGeometry(0.24, 0.35, 1.1, 10),
-      new THREE.MeshStandardMaterial({ color: 0x7e22ce, roughness: 0.8 }),
+      createToonMaterial(0x7c2d12),
     );
     mariaDress.position.set(0, 0.7, 0);
+    addComicOutline(mariaDress, 1.1);
     const mariaHead = new THREE.Mesh(
-      new THREE.SphereGeometry(0.2, 10, 10),
-      new THREE.MeshStandardMaterial({ color: 0xfde68a, roughness: 0.7 }),
+      new THREE.SphereGeometry(0.22, 10, 10),
+      createToonMaterial(0xf1c27d),
     );
-    mariaHead.position.set(0, 1.4, 0);
+    mariaHead.position.set(0, 1.42, 0);
+    addComicOutline(mariaHead, 1.12);
     signoraBalconyGroup.add(mariaDress, mariaHead);
     group.add(signoraBalconyGroup);
 
-    // GAG 2: Fragile Glass Window
+    // GAG 2: Fragile Glass Window on the East Wing
     const windowFrame = new THREE.Mesh(
-      new THREE.BoxGeometry(3.4, 2.6, 0.25),
-      new THREE.MeshStandardMaterial({ color: 0x451a03, roughness: 0.8 }),
+      new THREE.BoxGeometry(3.4, 2.6, 0.28),
+      createToonMaterial(0x18181b),
     );
-    windowFrame.position.set(7.5, 3.2, -10.75);
+    windowFrame.position.set(7.5, 3.4, northZ + 2.55);
     group.add(windowFrame);
 
-    windowGlassMesh.position.set(7.5, 3.2, -10.6);
+    windowGlassMesh.position.set(7.5, 3.4, northZ + 2.72);
     group.add(windowGlassMesh);
 
-    shardsGroup.position.set(7.5, 3.2, -10.5);
+    shardsGroup.position.set(7.5, 3.4, northZ + 2.8);
     group.add(shardsGroup);
 
-    // GAG 3: Parked Auto
-    carGroup.position.set(-11.5, 0, 12.2);
-    const carBodyMat = new THREE.MeshStandardMaterial({ color: 0x0f766e, roughness: 0.4, metalness: 0.3 });
-    const carCabinMat = new THREE.MeshStandardMaterial({ color: 0x134e4a, roughness: 0.3, metalness: 0.4 });
+    // GAG 3: Parked Auto on South Sideline
+    carGroup.position.set(-5.5, 0, southZ);
+    const carBodyMat = createToonMaterial(0x2dd4bf);
+    const carCabinMat = createToonMaterial(0xfef08a);
 
-    const lowerChassis = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.8, 1.8), carBodyMat);
+    const lowerChassis = new THREE.Mesh(new THREE.BoxGeometry(3.9, 0.85, 1.85), carBodyMat);
     lowerChassis.position.y = 0.65;
     lowerChassis.castShadow = true;
+    addBoxOutline(lowerChassis, 1.04);
     carGroup.add(lowerChassis);
 
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.72, 1.65), carCabinMat);
-    cabin.position.set(-0.2, 1.38, 0);
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.76, 1.68), carCabinMat);
+    cabin.position.set(-0.2, 1.42, 0);
     cabin.castShadow = true;
+    addBoxOutline(cabin, 1.04);
     carGroup.add(cabin);
 
     [
-      [-1.2, 0.35, 0.9],
-      [1.2, 0.35, 0.9],
-      [-1.2, 0.35, -0.9],
-      [1.2, 0.35, -0.9],
+      [-1.2, 0.36, 0.92],
+      [1.2, 0.36, 0.92],
+      [-1.2, 0.36, -0.92],
+      [1.2, 0.36, -0.92],
     ].forEach(([wx, wy, wz]) => {
-      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.25, 12), wheelMat);
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.28, 12), wheelMat);
       wheel.rotation.x = Math.PI / 2;
       wheel.position.set(wx, wy, wz);
+      addComicOutline(wheel, 1.1);
       carGroup.add(wheel);
     });
 
-    hlLeft.position.set(1.92, 0.7, 0.6);
-    hlRight.position.set(1.92, 0.7, -0.6);
+    hlLeft.position.set(1.96, 0.7, 0.6);
+    hlRight.position.set(1.96, 0.7, -0.6);
     carGroup.add(hlLeft, hlRight);
     group.add(carGroup);
 
     // GAG 4: Storm Drain Grate ("Tombino")
     const drainGrate = new THREE.Mesh(
-      new THREE.BoxGeometry(1.3, 0.04, 1.3),
-      new THREE.MeshStandardMaterial({ color: 0x18181b, metalness: 0.8, roughness: 0.4 }),
+      new THREE.BoxGeometry(1.35, 0.05, 1.35),
+      createToonMaterial(0x18181b),
     );
-    drainGrate.position.set(9.5, 0.02, 8.8);
+    drainGrate.position.set(dims.halfX * 0.6, 0.025, dims.halfZ - 1.0);
     group.add(drainGrate);
 
-    // Streetlamps for Night / Sunset atmosphere
+    // Streetlight Posts
     [-12, 0, 12].forEach((lx) => {
-      const pole = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.08, 0.11, 6.5, 8),
-        new THREE.MeshStandardMaterial({ color: 0x27272a, metalness: 0.7, roughness: 0.4 }),
+      const post = new THREE.Mesh(
+        new THREE.BoxGeometry(0.28, 7.4, 0.28),
+        createToonMaterial(0x1e293b),
       );
-      pole.position.set(lx, 3.25, -10.5);
-      const bulb = new THREE.Mesh(
-        new THREE.SphereGeometry(0.24, 10, 8),
-        new THREE.MeshBasicMaterial({ color: 0xfde047 }),
+      post.position.set(lx, 3.7, -dims.halfZ - 0.55);
+      addBoxOutline(post, 1.06);
+
+      const shade = new THREE.Mesh(
+        new THREE.ConeGeometry(0.65, 0.42, 8),
+        createToonMaterial(0xe2e8f0),
       );
-      bulb.position.set(lx, 6.5, -10.1);
-      group.add(pole, bulb);
+      shade.position.set(lx, 7.4, -dims.halfZ - 0.05);
+      addComicOutline(shade, 1.08);
+      group.add(post, shade);
     });
   }
 
-  // GAG 5: Low-Poly Procedural Dog (South Sideline at X = 3.5, Z = 9.4 — present on all pitches including beach)
+  // GAG 5: Cel-Shaded Street Dog (South Sideline)
   const dogHomeX = 3.5;
-  const dogHomeZ = 9.4;
+  const dogHomeZ = dims.halfZ - 0.4;
   const dogRoot = new THREE.Group();
   dogRoot.position.set(dogHomeX, 0, dogHomeZ);
   dogRoot.rotation.y = Math.PI;
 
-  const dogBody = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.3, 0.68), plasterMat);
+  const dogMat = createToonMaterial(0xfb923c);
+  const dogDarkMat = createToonMaterial(0x18181b);
+
+  const dogBody = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.32, 0.7), dogMat);
   dogBody.position.set(0, 0.36, 0);
-  dogBody.castShadow = true;
+  addBoxOutline(dogBody, 1.08);
   dogRoot.add(dogBody);
 
-  const dogHead = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.26, 0.3), plasterMat);
-  dogHead.position.set(0, 0.54, 0.34);
-  dogHead.castShadow = true;
+  const dogHead = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.28, 0.32), dogMat);
+  dogHead.position.set(0, 0.56, 0.34);
+  addBoxOutline(dogHead, 1.08);
   dogRoot.add(dogHead);
 
-  const dogSnout = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.16), wheelMat);
+  const dogSnout = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.16), dogDarkMat);
   dogSnout.position.set(0, 0.5, 0.52);
   dogRoot.add(dogSnout);
 
-  const earGeo = new THREE.BoxGeometry(0.08, 0.16, 0.1);
-  const leftEar = new THREE.Mesh(earGeo, roofMat);
-  leftEar.position.set(-0.12, 0.68, 0.3);
-  leftEar.rotation.z = 0.25;
-  const rightEar = new THREE.Mesh(earGeo, roofMat);
-  rightEar.position.set(0.12, 0.68, 0.3);
-  rightEar.rotation.z = -0.25;
-  dogRoot.add(leftEar, rightEar);
-
-  const dogTail = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.28, 6), roofMat);
+  const dogTail = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.3, 6), dogDarkMat);
   dogTail.position.set(0, 0.52, -0.38);
   dogTail.rotation.x = -0.6;
   dogRoot.add(dogTail);
 
-  const legGeo = new THREE.CylinderGeometry(0.045, 0.04, 0.28, 6);
+  const legGeo = new THREE.CylinderGeometry(0.05, 0.045, 0.28, 6);
   const legOffsets: Array<[number, number]> = [
     [-0.12, 0.22],
     [0.12, 0.22],
@@ -749,38 +1341,42 @@ export function buildCourtyardEnvironment(
     [0.12, -0.22],
   ];
   const dogLegs: THREE.Mesh[] = legOffsets.map(([lx, lz]) => {
-    const leg = new THREE.Mesh(legGeo, roofMat);
+    const leg = new THREE.Mesh(legGeo, dogDarkMat);
     leg.position.set(lx, 0.14, lz);
-    leg.castShadow = true;
+    addComicOutline(leg, 1.15);
     dogRoot.add(leg);
     return leg;
   });
   group.add(dogRoot);
 
-  // GAG 6 (Spiaggia): Low-Poly Procedural Seagull perched on West Cabin Roof
+  // GAG 6 (Spiaggia): Cel-Shaded Seagull
   const gullHomeX = -6.5;
-  const gullHomeY = 3.45;
-  const gullHomeZ = -11.8;
+  const gullHomeY = 3.6;
+  const gullHomeZ = -dims.halfZ - 2.0;
   const gullRoot = new THREE.Group();
   gullRoot.position.set(gullHomeX, gullHomeY, gullHomeZ);
   gullRoot.visible = isBeach;
 
-  const gullWhiteMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.7 });
-  const gullBeakMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.6 });
+  const gullWhiteMat = createToonMaterial(0xffffff);
+  const gullBeakMat = createToonMaterial(0xfacc15);
 
-  const gullBody = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.2, 0.46), gullWhiteMat);
+  const gullBody = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.22, 0.48), gullWhiteMat);
+  addBoxOutline(gullBody, 1.1);
   gullRoot.add(gullBody);
 
-  const gullBeak = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.2, 5), gullBeakMat);
+  const gullBeak = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.22, 5), gullBeakMat);
   gullBeak.rotation.x = Math.PI / 2;
-  gullBeak.position.set(0, 0.04, 0.3);
+  gullBeak.position.set(0, 0.04, 0.32);
+  addComicOutline(gullBeak, 1.15);
   gullRoot.add(gullBeak);
 
-  const wingGeo = new THREE.BoxGeometry(0.48, 0.04, 0.22);
+  const wingGeo = new THREE.BoxGeometry(0.5, 0.045, 0.24);
   const leftWing = new THREE.Mesh(wingGeo, gullWhiteMat);
   leftWing.position.set(-0.28, 0.06, 0);
+  addBoxOutline(leftWing, 1.1);
   const rightWing = new THREE.Mesh(wingGeo, gullWhiteMat);
   rightWing.position.set(0.28, 0.06, 0);
+  addBoxOutline(rightWing, 1.1);
   gullRoot.add(leftWing, rightWing);
   group.add(gullRoot);
 

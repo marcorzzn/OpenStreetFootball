@@ -86,6 +86,7 @@ export function tryTriggerGag(
   payload: GagDataPayload = {},
   force: boolean = false,
   currentPitch?: PitchId,
+  onStateChanged?: (gagState: GagSystemState, changedGagId: GagId) => void,
 ): boolean {
   const item = gagState.items[id];
   const cfg = GAG_CONFIGS[id];
@@ -128,9 +129,7 @@ export function tryTriggerGag(
   gagState.activeGagId = id;
 
   registry[id].onTriggered?.(item, simSteps);
-
-  // TODO (Fase F): Quando l'host avvia una transizione di stato gag in multiplayer,
-  // inviare gagState serializzato in JSON ai client tramite WebSocket.
+  onStateChanged?.(gagState, id);
 
   return true;
 }
@@ -143,6 +142,7 @@ export function stepGagStateMachine(
   gagState: GagSystemState,
   simSteps: number,
   registry: GagActionRegistry,
+  onStateChanged?: (gagState: GagSystemState, changedGagId: GagId) => void,
 ): void {
   for (const id of ALL_GAG_IDS) {
     const item = gagState.items[id];
@@ -156,6 +156,7 @@ export function stepGagStateMachine(
         item.stateStartStep = simSteps;
         handlers.onBeatEnter?.(item, simSteps);
         handlers.onBeatStep?.(item, simSteps, 0);
+        onStateChanged?.(gagState, id);
       }
     } else if (item.state === 'Beat') {
       const progress = cfg.beatSteps > 0 ? Math.min(1, elapsed / cfg.beatSteps) : 1;
@@ -165,6 +166,7 @@ export function stepGagStateMachine(
         item.stateStartStep = simSteps;
         handlers.onResolveEnter?.(item, simSteps);
         handlers.onResolveStep?.(item, simSteps, 0);
+        onStateChanged?.(gagState, id);
       }
     } else if (item.state === 'Resolve') {
       const progress = cfg.resolveSteps > 0 ? Math.min(1, elapsed / cfg.resolveSteps) : 1;
@@ -177,6 +179,7 @@ export function stepGagStateMachine(
           gagState.activeGagId = null;
         }
         handlers.onCooldownEnter?.(item, simSteps);
+        onStateChanged?.(gagState, id);
       }
     } else if (item.state === 'Cooldown') {
       if (simSteps >= item.cooldownUntilStep) {
@@ -184,7 +187,35 @@ export function stepGagStateMachine(
         item.stateStartStep = simSteps;
         item.payload = {};
         handlers.onIdleEnter?.(item, simSteps);
+        onStateChanged?.(gagState, id);
       }
     }
+  }
+}
+
+/**
+ * Eseguita solo sui Client multiplayer: applica gli effetti visivi continui (es. corsa del cane,
+ * picchiata del gabbiano, lampeggio fari auto) usando il contatore simSteps dell'Host senza
+ * decidere né avanzare le transizioni di stato.
+ */
+export function applyClientGagVisualStep(
+  gagState: GagSystemState,
+  hostSimSteps: number,
+  registry: GagActionRegistry,
+): void {
+  const activeId = gagState.activeGagId;
+  if (!activeId) return;
+  const item = gagState.items[activeId];
+  if (!item) return;
+  const cfg = GAG_CONFIGS[activeId];
+  const handlers = registry[activeId];
+  const elapsed = Math.max(0, hostSimSteps - item.stateStartStep);
+
+  if (item.state === 'Beat') {
+    const progress = cfg.beatSteps > 0 ? Math.min(1, elapsed / cfg.beatSteps) : 1;
+    handlers.onBeatStep?.(item, hostSimSteps, progress);
+  } else if (item.state === 'Resolve') {
+    const progress = cfg.resolveSteps > 0 ? Math.min(1, elapsed / cfg.resolveSteps) : 1;
+    handlers.onResolveStep?.(item, hostSimSteps, progress);
   }
 }

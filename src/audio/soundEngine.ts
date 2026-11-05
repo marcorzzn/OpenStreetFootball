@@ -1,4 +1,4 @@
-import { BallProfileId, GagId } from '../types/game';
+import { BallProfileId, GagId, VoiceShoutId } from '../types/game';
 
 class SoundEngine {
   private ctx: AudioContext | null = null;
@@ -79,7 +79,6 @@ class SoundEngine {
       const filter = ctx.createBiquadFilter();
       const gain = ctx.createGain();
 
-      // Riusa il tonfo del pallone bagnato filtrato con un lowpass scuro per il fango
       osc.type = 'sine';
       osc.frequency.setValueAtTime(88, now);
       osc.frequency.exponentialRampToValueAtTime(28, now + 0.16);
@@ -98,6 +97,165 @@ class SoundEngine {
       return;
     }
     this.playKick(profile, intensity * 0.45);
+  }
+
+  public playSlideSound(isViolent = false) {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const duration = isViolent ? 0.36 : 0.22;
+    const bufferSize = Math.floor(ctx.sampleRate * duration);
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = isViolent ? 620 : 950;
+    filter.Q.value = 1.4;
+
+    const gain = ctx.createGain();
+    const now = ctx.currentTime;
+    gain.gain.setValueAtTime(isViolent ? 0.28 : 0.16, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    noise.start(now);
+  }
+
+  public playJumpSound() {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(140, now);
+    osc.frequency.exponentialRampToValueAtTime(280, now + 0.11);
+    gain.gain.setValueAtTime(0.16, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.13);
+  }
+
+  public playSaveSound() {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(210, now);
+    osc.frequency.exponentialRampToValueAtTime(68, now + 0.14);
+    gain.gain.setValueAtTime(0.38, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.16);
+  }
+
+  public playFoulWhistle() {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    // Triple energetic referee whistle for Foul / Penalty / Handball
+    const blow = (start: number, duration: number, freq: number) => {
+      const osc = ctx.createOscillator();
+      const lfo = ctx.createOscillator();
+      const lfoGain = ctx.createGain();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, start);
+      lfo.frequency.setValueAtTime(48, start);
+      lfoGain.gain.setValueAtTime(165, start);
+
+      lfo.connect(lfoGain);
+      lfoGain.connect(osc.frequency);
+
+      gain.gain.setValueAtTime(0.01, start);
+      gain.gain.linearRampToValueAtTime(0.24, start + 0.02);
+      gain.gain.setValueAtTime(0.24, start + duration - 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      lfo.start(start);
+      osc.stop(start + duration);
+      lfo.stop(start + duration);
+    };
+
+    blow(now, 0.14, 2850);
+    blow(now + 0.18, 0.14, 2850);
+    blow(now + 0.36, 0.45, 2980);
+  }
+
+  /**
+   * Synthesizes human-like vocal formants for street football shouts ("PASSALA!", "TIRO IO!", "UOMO!", "FALLO!")
+   */
+  public playVoiceShout(shoutId: VoiceShoutId) {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+
+    const syllables: Array<{ offset: number; dur: number; f0: number; f1: number }> =
+      shoutId === 'passala'
+        ? [
+            { offset: 0, dur: 0.13, f0: 195, f1: 780 },
+            { offset: 0.15, dur: 0.12, f0: 230, f1: 860 },
+            { offset: 0.29, dur: 0.22, f0: 175, f1: 720 },
+          ]
+        : shoutId === 'tiro_io'
+          ? [
+              { offset: 0, dur: 0.14, f0: 215, f1: 420 },
+              { offset: 0.16, dur: 0.14, f0: 185, f1: 540 },
+              { offset: 0.32, dur: 0.24, f0: 245, f1: 820 },
+            ]
+          : shoutId === 'uomo'
+            ? [
+                { offset: 0, dur: 0.18, f0: 168, f1: 480 },
+                { offset: 0.2, dur: 0.22, f0: 145, f1: 520 },
+              ]
+            : [
+                { offset: 0, dur: 0.14, f0: 230, f1: 820 },
+                { offset: 0.16, dur: 0.16, f0: 260, f1: 920 },
+                { offset: 0.34, dur: 0.28, f0: 210, f1: 760 },
+              ];
+
+    syllables.forEach((syl) => {
+      const start = now + syl.offset;
+      const osc = ctx.createOscillator();
+      const formant = ctx.createBiquadFilter();
+      const gain = ctx.createGain();
+
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(syl.f0, start);
+      osc.frequency.linearRampToValueAtTime(syl.f0 * 0.92, start + syl.dur);
+
+      formant.type = 'bandpass';
+      formant.frequency.setValueAtTime(syl.f1, start);
+      formant.Q.setValueAtTime(3.2, start);
+
+      gain.gain.setValueAtTime(0.01, start);
+      gain.gain.linearRampToValueAtTime(0.26, start + 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + syl.dur);
+
+      osc.connect(formant);
+      formant.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + syl.dur + 0.01);
+    });
   }
 
   public playPostHit() {
@@ -212,7 +370,6 @@ class SoundEngine {
     const now = ctx.currentTime;
 
     if (gag === 'vecchia_buca') {
-      // Scissors snip + angry voice warble + long deflation hiss
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sawtooth';
@@ -227,7 +384,6 @@ class SoundEngine {
       osc.stop(now + 0.36);
       this.playHiss(0.9);
     } else if (gag === 'finestra_rotta') {
-      // Glass shatter burst
       for (let i = 0; i < 6; i++) {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -241,7 +397,6 @@ class SoundEngine {
         osc.stop(now + i * 0.03 + 0.15);
       }
     } else if (gag === 'allarme_auto') {
-      // Classic Italian street car alarm BEEP BEEP BEEP
       for (let i = 0; i < 4; i++) {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
@@ -256,7 +411,6 @@ class SoundEngine {
         osc.stop(now + i * 0.22 + 0.2);
       }
     } else if (gag === 'tombino_fogna') {
-      // Hollow drain plop
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
@@ -269,7 +423,6 @@ class SoundEngine {
       osc.start(now);
       osc.stop(now + 0.17);
     } else if (gag === 'palla_tetto') {
-      // Tile clatter
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'triangle';
@@ -282,7 +435,6 @@ class SoundEngine {
       osc.start(now);
       osc.stop(now + 0.25);
     } else if (gag === 'cane_palla') {
-      // Synthesized double dog bark ("BAU! BAU!") using sawtooth oscillator + bandpass filter
       [0, 0.18].forEach((offset) => {
         const start = now + offset;
         const osc = ctx.createOscillator();
@@ -308,7 +460,6 @@ class SoundEngine {
         osc.stop(start + 0.15);
       });
     } else if (gag === 'gabbiano_palla') {
-      // Synthesized seagull cry ("KREE-EE!")
       [0, 0.24].forEach((offset, idx) => {
         const start = now + offset;
         const osc = ctx.createOscillator();
@@ -360,9 +511,6 @@ class SoundEngine {
     osc.stop(now + 0.1);
   }
 
-  /**
-   * Breve suono sintetizzato di festeggiamento ("ohhh!" ascendente con oscillatori) per Tunnel (+1) e Cappello (+1).
-   */
   public playTrickCheer() {
     const ctx = this.ensureContext();
     if (!ctx) return;
@@ -394,9 +542,6 @@ class SoundEngine {
     });
   }
 
-  /**
-   * Attiva o disattiva il fondale sintetizzato leggero di onde del mare per il campo Spiaggia.
-   */
   public setBeachWavesActive(shouldPlay: boolean) {
     const active = shouldPlay && this.wavesEnabled && !this.muted;
     if (!active) {
@@ -438,14 +583,14 @@ class SoundEngine {
 
     const lfo = ctx.createOscillator();
     lfo.type = 'sine';
-    lfo.frequency.value = 0.18; // Lento respiro delle onde (~5.5s per onda)
+    lfo.frequency.value = 0.18;
     const lfoGain = ctx.createGain();
     lfoGain.gain.value = 110;
     lfo.connect(lfoGain);
     lfoGain.connect(filter.frequency);
 
     const gain = ctx.createGain();
-    gain.gain.value = 0.032; // Basso volume di sottofondo
+    gain.gain.value = 0.032;
 
     noise.connect(filter);
     filter.connect(gain);

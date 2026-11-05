@@ -8,35 +8,55 @@ import {
   CloudRain,
   Compass,
   Copy,
+  Dices,
   Gamepad2,
   Globe,
   Keyboard,
   Maximize2,
+  Megaphone,
   Pause,
   Play,
   RotateCcw,
   Share2,
+  Shield,
   Smartphone,
   Sparkles,
+  Sun,
+  Users,
   Volume2,
   VolumeX,
   Wifi,
 } from 'lucide-react';
 import { soundEngine } from './audio/soundEngine';
-import { HudTelemetry, StreetPitchCanvas } from './components/StreetPitchCanvas';
+import {
+  HudTelemetry,
+  RemoteSyncStateUpdate,
+  StreetPitchCanvas,
+} from './components/StreetPitchCanvas';
 import { InputManager } from './game/inputManager';
 import { generateMatchSeed } from './game/rng';
+import { MatchStartPayload, ReliableGameEventPayload } from './net/protocol';
 import {
   BALL_PROFILES,
   BallProfileId,
+  BOT_DIFFICULTIES,
+  BotDifficulty,
   CameraMode,
   GAG_CONFIGS,
   GagId,
   GameMode,
+  getEffectivePitchDimensions,
   PITCH_CONFIGS,
   PitchId,
+  PLAYER_CATEGORIES,
+  PlayerCategoryId,
   STREET_RULES,
   StreetRuleId,
+  TEAM_SIZE_OPTIONS,
+  TeamSize,
+  TimeOfDayId,
+  VOICE_SHOUTS,
+  VoiceShoutId,
   WEATHER_CONFIGS,
   WeatherId,
 } from './types/game';
@@ -56,8 +76,12 @@ export default function App() {
   const [gameMode, setGameMode] = useState<GameMode>('single');
   const [cameraMode, setCameraMode] = useState<CameraMode>('classic');
   const [ballProfile, setBallProfile] = useState<BallProfileId>('supersantos');
-  const [weather, setWeather] = useState<WeatherId>('tramonto');
+  const [weather, setWeather] = useState<WeatherId>('sole');
+  const [timeOfDay, setTimeOfDay] = useState<TimeOfDayId>('giorno');
   const [pitch, setPitch] = useState<PitchId>('cortile');
+  const [teamSize, setTeamSize] = useState<TeamSize>(3);
+  const [botDifficulty, setBotDifficulty] = useState<BotDifficulty>('normale');
+  const [playerCategory, setPlayerCategory] = useState<PlayerCategoryId>('attacker');
   const [streetRule, setStreetRule] = useState<StreetRuleId>('classica');
   const [ruleTunnelEnabled, setRuleTunnelEnabled] = useState<boolean>(true);
   const [ruleCappelloEnabled, setRuleCappelloEnabled] = useState<boolean>(true);
@@ -68,7 +92,7 @@ export default function App() {
   const [gagsEnabled, setGagsEnabled] = useState<boolean>(true);
   const [muted, setMuted] = useState<boolean>(false);
   const [dockCollapsed, setDockCollapsed] = useState<boolean>(false);
-  const [activeDockTab, setActiveDockTab] = useState<'pallone' | 'ambiente' | 'gag' | 'rete'>('pallone');
+  const [activeDockTab, setActiveDockTab] = useState<'ruolo' | 'ambiente' | 'gag' | 'rete'>('ruolo');
   const [showTouchControls, setShowTouchControls] = useState<boolean>(false);
   const [showNetworkModal, setShowNetworkModal] = useState<boolean>(false);
   const [showControlsModal, setShowControlsModal] = useState<boolean>(false);
@@ -76,6 +100,7 @@ export default function App() {
   const [copiedPitchId, setCopiedPitchId] = useState<string | null>(null);
 
   const [triggerGagRequest, setTriggerGagRequest] = useState<{ gag: GagId; seq: number } | null>(null);
+  const [triggerShoutRequest, setTriggerShoutRequest] = useState<{ shout: VoiceShoutId; seq: number } | null>(null);
   const [resetMatchSeq, setResetMatchSeq] = useState<number>(0);
   const [matchSeed, setMatchSeed] = useState<number>(() => generateMatchSeed());
 
@@ -84,12 +109,14 @@ export default function App() {
   const [joinCodeInput, setJoinCodeInput] = useState<string>('');
   const [onlineRoomCode, setOnlineRoomCode] = useState<string | null>(null);
   const [isOnlineHost, setIsOnlineHost] = useState<boolean>(true);
+  const [roomPlayerCount, setRoomPlayerCount] = useState<number>(1);
   const [lanIps, setLanIps] = useState<string[]>([]);
   const [availableRooms, setAvailableRooms] = useState<NetworkRoomSummary[]>([]);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState<boolean>(false);
+  const [pingMs, setPingMs] = useState<number>(0);
 
-  // Live HUD Telemetry from 60fps loop
+  // Live HUD Telemetry
   const [telemetry, setTelemetry] = useState<HudTelemetry>({
     scoreBlue: 0,
     scoreRed: 0,
@@ -101,12 +128,20 @@ export default function App() {
     ballProfile: 'supersantos',
     ballSpeedKmh: 0,
     shootCharge: 0,
+    rightHoldCharge: 0,
+    dribbleExposure: 0,
+    hasBall: false,
+    markingCallActive: false,
+    gkRushActive: false,
+    setPieceState: null,
+    activeShout: null,
     cameraMode: 'classic',
     connectedGamepads: [],
     activeGag: null,
     lastBanner: null,
     pointerLocked: false,
     fps: 60,
+    autoScaleFpsAvg: 60,
     frameTimeMs: 3.8,
     drawCalls: 42,
     triangles: 4800,
@@ -115,13 +150,13 @@ export default function App() {
     cameraFar: 140,
     activeGagStateLabel: 'nessuna gag',
     trickPopup: null,
+    snapshotsPerSec: 0,
   });
 
   const inputManagerRef = useRef<InputManager | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const joystickTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const [joystickKnob, setJoystickKnob] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const lowFpsStrikeRef = useRef<number>(0);
 
   useEffect(() => {
     const mgr = new InputManager();
@@ -134,19 +169,39 @@ export default function App() {
     };
   }, []);
 
-  // Auto-Scale Render Resolution Guard for Weak GPUs
-  useEffect(() => {
-    if (!autoRenderScale || !isPlaying || isPaused) return;
-    if (telemetry.fps < 42 && !telemetry.isSoftwareGl) {
-      lowFpsStrikeRef.current += 1;
-      if (lowFpsStrikeRef.current >= 4) {
-        lowFpsStrikeRef.current = 0;
-        setRenderScale((prev) => (prev > 0.75 ? 0.75 : prev > 0.5 ? 0.5 : prev));
+  const sendHostReliableEvent = useCallback(
+    (event: ReliableGameEventPayload) => {
+      if (
+        gameMode === 'online_lan' &&
+        isOnlineHost &&
+        onlineRoomCode &&
+        wsRef.current &&
+        wsRef.current.readyState === WebSocket.OPEN
+      ) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: 'game_event',
+            event,
+          }),
+        );
       }
-    } else {
-      lowFpsStrikeRef.current = 0;
+    },
+    [gameMode, isOnlineHost, onlineRoomCode],
+  );
+
+  const handleRemoteSyncState = useCallback((sync: RemoteSyncStateUpdate) => {
+    if (typeof sync.seed === 'number') setMatchSeed(sync.seed >>> 0);
+    if (sync.weather) setWeather(sync.weather);
+    if (sync.pitch) setPitch(sync.pitch);
+    if (sync.ballProfile) setBallProfile(sync.ballProfile);
+    if (sync.streetRule) setStreetRule(sync.streetRule);
+    if (typeof sync.ruleTunnelEnabled === 'boolean') setRuleTunnelEnabled(sync.ruleTunnelEnabled);
+    if (typeof sync.ruleCappelloEnabled === 'boolean') setRuleCappelloEnabled(sync.ruleCappelloEnabled);
+    if (typeof sync.isPlaying === 'boolean') {
+      setIsPlaying(sync.isPlaying);
+      if (sync.isPlaying) setIsPaused(false);
     }
-  }, [autoRenderScale, isPlaying, isPaused, telemetry.fps, telemetry.isSoftwareGl]);
+  }, []);
 
   const startNewMatchWithSeed = useCallback(() => {
     if (gameMode !== 'online_lan' || isOnlineHost) {
@@ -158,12 +213,43 @@ export default function App() {
         wsRef.current &&
         wsRef.current.readyState === WebSocket.OPEN
       ) {
-        wsRef.current.send(JSON.stringify({ type: 'match_start', seed: nextSeed }));
+        const matchPayload: MatchStartPayload = {
+          seed: nextSeed,
+          weather,
+          timeOfDay,
+          pitch,
+          teamSize,
+          botDifficulty,
+          playerCategory,
+          ballProfile,
+          streetRule,
+          ruleTunnelEnabled,
+          ruleCappelloEnabled,
+        };
+        wsRef.current.send(
+          JSON.stringify({
+            type: 'match_start',
+            seed: nextSeed,
+            match: matchPayload,
+          }),
+        );
       }
     }
-  }, [gameMode, isOnlineHost]);
+  }, [
+    gameMode,
+    isOnlineHost,
+    weather,
+    timeOfDay,
+    pitch,
+    teamSize,
+    botDifficulty,
+    playerCategory,
+    ballProfile,
+    streetRule,
+    ruleTunnelEnabled,
+    ruleCappelloEnabled,
+  ]);
 
-  // Keyboard shortcuts for Pause (Esc), Dock Collapse (H), Perf Monitor (F3), and Start Match (Enter/Space)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (
@@ -175,7 +261,7 @@ export default function App() {
       }
       if (
         !isPlaying &&
-        (e.code === 'Enter' || e.code === 'Space') &&
+        e.code === 'Enter' &&
         !showNetworkModal &&
         !showControlsModal &&
         !showReleaseModal
@@ -207,7 +293,7 @@ export default function App() {
         setAvailableRooms(data.rooms || []);
       }
     } catch {
-      // Ignore on static hosts like GitHub Pages / Itch.io
+      // Ignore on static hosts
     }
   }, []);
 
@@ -219,9 +305,16 @@ export default function App() {
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
+      const pingInterval = window.setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ping', clientTimestamp: performance.now() }));
+        }
+      }, 1500);
+
       ws.onopen = () => {
         setWsConnected(true);
         ws.send(JSON.stringify({ type: 'list_rooms' }));
+        ws.send(JSON.stringify({ type: 'ping', clientTimestamp: performance.now() }));
       };
 
       ws.onclose = () => {
@@ -235,9 +328,13 @@ export default function App() {
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
-          if (msg.type === 'room_joined' || msg.type === 'room_updated') {
+          if (msg.type === 'pong' && typeof msg.clientTimestamp === 'number') {
+            const rtt = Math.max(1, Math.round(performance.now() - msg.clientTimestamp));
+            setPingMs((prev) => (prev === 0 ? rtt : Math.round(prev * 0.7 + rtt * 0.3)));
+          } else if (msg.type === 'room_joined' || msg.type === 'room_updated') {
             const room = msg.room;
             setOnlineRoomCode(room.code);
+            setRoomPlayerCount(Array.isArray(room.players) ? room.players.length : 1);
             const myId = msg.playerId;
             if (myId) {
               setIsOnlineHost(room.hostId === myId);
@@ -246,11 +343,35 @@ export default function App() {
             if (room.ballProfile) setBallProfile(room.ballProfile as BallProfileId);
             if (room.weather) setWeather(room.weather as WeatherId);
             if (room.rule) setStreetRule(room.rule as StreetRuleId);
+            if (typeof room.ruleTunnelEnabled === 'boolean') setRuleTunnelEnabled(room.ruleTunnelEnabled);
+            if (typeof room.ruleCappelloEnabled === 'boolean') setRuleCappelloEnabled(room.ruleCappelloEnabled);
             if (typeof room.seed === 'number') setMatchSeed(room.seed >>> 0);
             setGameMode('online_lan');
             setNetworkError(null);
-          } else if (msg.type === 'match_start' && typeof msg.seed === 'number') {
-            setMatchSeed(msg.seed >>> 0);
+          } else if (msg.type === 'match_start') {
+            if (msg.match && typeof msg.match.seed === 'number') {
+              const m = msg.match as MatchStartPayload;
+              setMatchSeed(m.seed >>> 0);
+              setWeather(m.weather);
+              setPitch(m.pitch);
+              setBallProfile(m.ballProfile);
+              setStreetRule(m.streetRule);
+              setRuleTunnelEnabled(m.ruleTunnelEnabled);
+              setRuleCappelloEnabled(m.ruleCappelloEnabled);
+              setIsPlaying(true);
+              setIsPaused(false);
+            } else if (typeof msg.seed === 'number') {
+              setMatchSeed(msg.seed >>> 0);
+            }
+          } else if (msg.type === 'host_disconnected') {
+            setOnlineRoomCode(null);
+            setIsOnlineHost(true);
+            setRoomPlayerCount(1);
+            setGameMode('single');
+            setNetworkError(
+              msg.message || "L'host si è disconnesso: la stanza è stata chiusa automaticamente.",
+            );
+            setShowNetworkModal(true);
           } else if (msg.type === 'rooms_list') {
             setAvailableRooms(
               (msg.rooms || []).map(
@@ -280,6 +401,7 @@ export default function App() {
       };
 
       return () => {
+        window.clearInterval(pingInterval);
         ws.close();
       };
     } catch {
@@ -302,6 +424,8 @@ export default function App() {
         ballProfile,
         weather,
         rule: streetRule,
+        ruleTunnelEnabled,
+        ruleCappelloEnabled,
         seed: nextSeed,
       }),
     );
@@ -343,18 +467,87 @@ export default function App() {
 
   const handleWeatherChange = (nextWeather: WeatherId) => {
     setWeather(nextWeather);
-    // TODO (Fase F): Se in multiplayer (gameMode === 'online_lan') e isOnlineHost è true,
-    // inviare qui il messaggio WebSocket (es. room_config / world_state) per sincronizzare
-    // il cambio di meteo con tutti i client connessi nella stanza.
+    sendHostReliableEvent({ kind: 'weather_change', weather: nextWeather });
+  };
+
+  const handlePitchChange = (nextPitch: PitchId) => {
+    setPitch(nextPitch);
+    sendHostReliableEvent({ kind: 'pitch_change', pitch: nextPitch });
+  };
+
+  const handleBallProfileChange = (nextProfile: BallProfileId) => {
+    setBallProfile(nextProfile);
+    sendHostReliableEvent({ kind: 'ball_profile_change', ballProfile: nextProfile });
+  };
+
+  const handleStreetRuleChange = (nextRule: StreetRuleId) => {
+    setStreetRule(nextRule);
+    sendHostReliableEvent({
+      kind: 'rules_change',
+      streetRule: nextRule,
+      ruleTunnelEnabled,
+      ruleCappelloEnabled,
+    });
+  };
+
+  const handleTunnelRuleToggle = (enabled: boolean) => {
+    setRuleTunnelEnabled(enabled);
+    sendHostReliableEvent({
+      kind: 'rules_change',
+      streetRule,
+      ruleTunnelEnabled: enabled,
+      ruleCappelloEnabled,
+    });
+  };
+
+  const handleCappelloRuleToggle = (enabled: boolean) => {
+    setRuleCappelloEnabled(enabled);
+    sendHostReliableEvent({
+      kind: 'rules_change',
+      streetRule,
+      ruleTunnelEnabled,
+      ruleCappelloEnabled: enabled,
+    });
+  };
+
+  /**
+   * "Tutto a Caso (Random)" — randomizes pitch, weather, time of day, ball, team size, role, and rules.
+   */
+  const handleRandomizeAll = () => {
+    const pitches = Object.keys(PITCH_CONFIGS) as PitchId[];
+    const weathers = Object.keys(WEATHER_CONFIGS) as WeatherId[];
+    const balls = Object.keys(BALL_PROFILES) as BallProfileId[];
+    const roles = Object.keys(PLAYER_CATEGORIES) as PlayerCategoryId[];
+    const times: TimeOfDayId[] = ['giorno', 'tramonto', 'notte'];
+    const rules = Object.keys(STREET_RULES) as StreetRuleId[];
+
+    const rPitch = pitches[Math.floor(Math.random() * pitches.length)];
+    const rWeather = weathers[Math.floor(Math.random() * weathers.length)];
+    const rBall = balls[Math.floor(Math.random() * balls.length)];
+    const rRole = roles[Math.floor(Math.random() * roles.length)];
+    const rTime = times[Math.floor(Math.random() * times.length)];
+    const rSize = TEAM_SIZE_OPTIONS[Math.floor(Math.random() * TEAM_SIZE_OPTIONS.length)];
+    const rRule = rules[Math.floor(Math.random() * rules.length)];
+
+    handlePitchChange(rPitch);
+    handleWeatherChange(rWeather);
+    handleBallProfileChange(rBall);
+    setPlayerCategory(rRole);
+    setTimeOfDay(rTime);
+    setTeamSize(rSize);
+    handleStreetRuleChange(rRule);
+    soundEngine.playTrickCheer();
   };
 
   const currentBall = BALL_PROFILES[ballProfile];
   const currentWeather = WEATHER_CONFIGS[weather];
   const currentPitch = PITCH_CONFIGS[pitch];
+  const currentRole = PLAYER_CATEGORIES[playerCategory];
+  const effectiveDims = getEffectivePitchDimensions(pitch, teamSize);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-stone-950 text-stone-100 select-none">
-      {/* 1. Full-Viewport 3D WebGL Courtyard Canvas */}
+      {/* 1. Full-Viewport 3D WebGL Courtyard & Stadium Canvas */}
       <StreetPitchCanvas
         isPlaying={isPlaying}
         isPaused={isPaused}
@@ -364,23 +557,32 @@ export default function App() {
         ballProfile={ballProfile}
         onBallProfileChange={setBallProfile}
         weather={weather}
+        timeOfDay={timeOfDay}
         pitch={pitch}
+        teamSize={teamSize}
+        botDifficulty={botDifficulty}
+        playerCategory={playerCategory}
         streetRule={streetRule}
         ruleTunnelEnabled={ruleTunnelEnabled}
         ruleCappelloEnabled={ruleCappelloEnabled}
         renderScale={renderScale}
+        autoRenderScale={autoRenderScale}
+        onRenderScaleChange={setRenderScale}
+        showPerfMonitor={showPerfMonitor}
         gagsEnabled={gagsEnabled}
         triggerGagRequest={triggerGagRequest}
+        triggerShoutRequest={triggerShoutRequest}
         resetMatchSeq={resetMatchSeq}
         matchSeed={matchSeed}
         inputManagerRef={inputManagerRef}
         wsRef={wsRef}
         isOnlineHost={isOnlineHost}
         onlineRoomCode={onlineRoomCode}
+        onRemoteSyncState={handleRemoteSyncState}
         onTelemetryUpdate={setTelemetry}
       />
 
-      {/* In-Game Performance Monitor Badge (stats-gl style: FPS, Frame ms, Physics Steps, Draw Calls, Triangles, Render Scale + Weather/camera.far + Pitch/Rules) */}
+      {/* In-Game Performance Monitor Badge (F3) */}
       {showPerfMonitor && (
         <div className="fixed top-3 left-3 z-20 px-3 py-1.5 bg-stone-950/92 border border-stone-700/80 rounded-lg font-mono-num text-[11px] text-stone-300 flex flex-col gap-0.5 pointer-events-auto">
           <div className="flex items-center gap-2.5">
@@ -396,34 +598,46 @@ export default function App() {
             <span className="hidden sm:inline">{telemetry.drawCalls} draw</span>
             <span className="hidden md:inline">·</span>
             <span className="hidden md:inline">{(telemetry.triangles / 1000).toFixed(1)}k tri</span>
-            <span>·</span>
-            <span className="text-amber-300">Scale {Math.round(renderScale * 100)}%</span>
           </div>
           <div className="flex items-center gap-2 text-[10px] text-stone-400 pl-6">
             <span>
-              Meteo: <strong className="text-stone-200">{currentWeather.name}</strong> ({weather})
-            </span>
-            <span>·</span>
-            <span>
-              camera.far: <strong className="text-emerald-300">{telemetry.cameraFar}m</strong>
-            </span>
-            <span>·</span>
-            <span>
-              Gag: <strong className="text-amber-300">{telemetry.activeGagStateLabel}</strong>
-            </span>
-          </div>
-          <div className="flex items-center gap-2 text-[10px] text-stone-400 pl-6">
-            <span>
-              Campo: <strong className="text-stone-200">{currentPitch.name}</strong> ({pitch})
-            </span>
-            <span>·</span>
-            <span>
-              Regole:{' '}
-              <strong className="text-emerald-300">
-                {STREET_RULES[streetRule].name}
-                {ruleTunnelEnabled ? ' + Tunnel' : ''}
-                {ruleCappelloEnabled ? ' + Cappello' : ''}
+              Render Scale:{' '}
+              <strong className="text-amber-300">{Math.round(renderScale * 100)}%</strong> (
+              <strong className={autoRenderScale ? 'text-amber-400' : 'text-stone-200'}>
+                {autoRenderScale ? 'Auto' : 'Manuale'}
               </strong>
+              )
+            </span>
+            <span>·</span>
+            <span>
+              Media 2s: <strong className="text-emerald-300">{telemetry.autoScaleFpsAvg} FPS</strong>
+            </span>
+            <span>·</span>
+            <button
+              onClick={() => setAutoRenderScale((prev) => !prev)}
+              className="px-1.5 py-0.2 bg-stone-800 hover:bg-stone-700 text-amber-300 border border-stone-600 rounded text-[9px] font-semibold cursor-pointer"
+            >
+              {autoRenderScale ? 'Passa a Manuale' : 'Attiva Auto'}
+            </button>
+          </div>
+          <div className="flex items-center gap-2 text-[10px] text-stone-400 pl-6">
+            <span>
+              Campo: <strong className="text-stone-200">{currentPitch.name}</strong> (
+              {Math.round(effectiveDims.halfX * 2)}m × {Math.round(effectiveDims.halfZ * 2)}m)
+            </span>
+            <span>·</span>
+            <span>
+              Formato: <strong className="text-amber-300">{teamSize}v{teamSize}</strong> (Bot{' '}
+              {BOT_DIFFICULTIES[botDifficulty].name})
+            </span>
+          </div>
+          <div className="flex items-center gap-2 text-[10px] text-stone-400 pl-6">
+            <span>
+              Ruolo: <strong className="text-sky-300">{currentRole.name}</strong>
+            </span>
+            <span>·</span>
+            <span>
+              Meteo: <strong className="text-stone-200">{currentWeather.name}</strong> ({timeOfDay})
             </span>
           </div>
         </div>
@@ -431,25 +645,33 @@ export default function App() {
 
       {/* 2. TITLE SCREEN OVERLAY (When not playing) */}
       {!isPlaying && (
-        <div className="fixed inset-0 z-20 flex flex-col justify-between p-6 md:p-10 pointer-events-none bg-gradient-to-t from-stone-950/90 via-stone-950/35 to-stone-950/75">
+        <div className="fixed inset-0 z-20 flex flex-col justify-between p-5 md:p-8 pointer-events-none bg-gradient-to-t from-stone-950/92 via-stone-950/45 to-stone-950/80 overflow-y-auto">
           {/* Top Bar */}
-          <div className="flex items-center justify-between gap-6 pointer-events-auto mt-7 sm:mt-0">
-            <div className="flex items-center gap-3 sm:pl-64">
+          <div className="flex items-center justify-between gap-4 pointer-events-auto mt-7 sm:mt-0">
+            <div className="flex items-center gap-3 sm:pl-72">
               <span className="font-display text-2xl font-extrabold tracking-tight text-amber-400">
                 OPENSTREETFOOTBALL
               </span>
-              <span className="text-xs text-stone-300 hidden lg:inline">
-                · Open-Source MIT · Web & Android
+              <span className="text-xs text-stone-300 hidden xl:inline">
+                · Fumetto Realistico · 1v1 fino a 11v11 · Comandi Mouse & Tastiera
               </span>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={handleRandomizeAll}
+                className="px-3 py-2 text-xs font-bold bg-amber-500 hover:bg-amber-400 text-stone-950 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer shadow"
+              >
+                <Dices className="w-4 h-4" />
+                <span>Tutto a Caso!</span>
+              </button>
+
               <button
                 onClick={() => setShowReleaseModal(true)}
-                className="px-3.5 py-2 text-xs font-semibold bg-emerald-950/90 hover:bg-emerald-900 text-emerald-200 border border-emerald-700/80 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                className="px-3 py-2 text-xs font-semibold bg-emerald-950/90 hover:bg-emerald-900 text-emerald-200 border border-emerald-700/80 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
               >
                 <Share2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Pubblica & Community</span>
+                <span>Open Source</span>
               </button>
 
               <button
@@ -457,18 +679,18 @@ export default function App() {
                   refreshNetworkInfo();
                   setShowNetworkModal(true);
                 }}
-                className="px-3.5 py-2 text-xs font-semibold bg-stone-900 hover:bg-stone-800 text-stone-100 border border-stone-700 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer"
+                className="px-3 py-2 text-xs font-semibold bg-stone-900 hover:bg-stone-800 text-stone-100 border border-stone-700 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
               >
                 <Wifi className="w-3.5 h-3.5 text-amber-400" />
-                <span>Lobby Online / LAN {onlineRoomCode ? `(${onlineRoomCode})` : ''}</span>
+                <span>Lobby LAN {onlineRoomCode ? `(${onlineRoomCode})` : ''}</span>
               </button>
 
               <button
                 onClick={() => setShowControlsModal(true)}
-                className="px-3.5 py-2 text-xs font-semibold bg-stone-900 hover:bg-stone-800 text-stone-100 border border-stone-700 rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer"
+                className="px-3 py-2 text-xs font-semibold bg-stone-900 hover:bg-stone-800 text-stone-100 border border-stone-700 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
               >
                 <Keyboard className="w-3.5 h-3.5 text-sky-400" />
-                <span>Comandi & Controller</span>
+                <span>Guida Comandi Mouse</span>
               </button>
 
               <button
@@ -481,15 +703,15 @@ export default function App() {
             </div>
           </div>
 
-          {/* Center-Left Bespoke Inline SVG Title Lockup over open negative space */}
-          <div className="my-auto max-w-2xl pointer-events-auto">
-            <div className="text-xs font-medium tracking-wider text-amber-300 mb-2">
-              CALCIO DA CORTILE OPEN-SOURCE · FISICA DEI PALLONI · VISUALE FPS & TV
+          {/* Center-Left Title Lockup + Complete Match Setup Grid */}
+          <div className="my-auto max-w-4xl pointer-events-auto py-3">
+            <div className="text-xs font-semibold tracking-wider text-amber-300 mb-1.5 uppercase">
+              STILE FUMETTO REALISTICO · DA 1v1 FINO A 11 CONTRO 11 · FALLI, BARRIERA & RIGORI
             </div>
 
             <svg
-              viewBox="0 0 720 145"
-              className="w-full max-w-xl h-auto mb-4 drop-shadow-[0_6px_24px_rgba(0,0,0,0.85)]"
+              viewBox="0 0 720 132"
+              className="w-full max-w-lg h-auto mb-3 drop-shadow-[0_6px_24px_rgba(0,0,0,0.85)]"
               role="img"
               aria-label="OpenStreetFootball"
             >
@@ -500,79 +722,146 @@ export default function App() {
                   <stop offset="100%" stopColor="#ef4444" />
                 </linearGradient>
               </defs>
-              <circle cx="62" cy="72" r="48" fill="url(#osfGrad)" stroke="#18181b" strokeWidth="5" />
+              <circle cx="58" cy="66" r="44" fill="url(#osfGrad)" stroke="#18181b" strokeWidth="5" />
               <path
-                d="M 22 48 Q 62 72 102 48 M 20 92 Q 62 70 104 92 M 62 24 L 62 120"
+                d="M 20 44 Q 58 66 96 44 M 18 86 Q 58 64 98 86 M 58 22 L 58 110"
                 stroke="#18181b"
                 strokeWidth="4.5"
                 fill="none"
               />
               <text
-                x="132"
-                y="74"
+                x="122"
+                y="68"
                 fill="#fafaf9"
                 fontFamily="'Barlow Condensed', sans-serif"
                 fontWeight="800"
                 fontStyle="italic"
-                fontSize="64"
+                fontSize="62"
                 letterSpacing="1"
               >
                 OPENSTREETFOOTBALL
               </text>
               <text
-                x="134"
-                y="116"
+                x="124"
+                y="108"
                 fill="#fbbf24"
                 fontFamily="'Barlow Condensed', sans-serif"
                 fontWeight="700"
-                fontSize="30"
-                letterSpacing="3"
+                fontSize="27"
+                letterSpacing="2.5"
               >
-                CALCIO DA STRADA · PRIMA PERSONA & CLASSICO
+                CORTILE, GABBIA, SPIAGGIA & STADIO 11v11
               </text>
             </svg>
 
-            <p className="text-sm md:text-base text-stone-200 max-w-xl leading-relaxed mb-6">
-              Scegli se giocare <strong className="text-amber-300">da lontano</strong> come nei classici arcade o
-              entrare negli occhi del calciatore in <strong className="text-sky-300">Prima Persona (FPS)</strong>.
-              Calcia il leggero <em>pallone di plastica</em>, sfida la pioggia col pallone di cuoio pesante e attento
-              alla finestra del condominio e alle forbici della Signora Maria!
-            </p>
-
-            {/* Quick Mode & Camera Selector Row */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6 max-w-2xl">
-              <div className="bg-stone-900/90 border border-stone-700/80 rounded-xl p-3">
-                <div className="text-[11px] text-stone-400 mb-1.5">Visuale di Gioco (Tasto C)</div>
-                <div className="flex gap-1.5">
-                  <button
-                    onClick={() => setCameraMode('classic')}
-                    className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                      cameraMode === 'classic'
-                        ? 'bg-amber-500 text-stone-950'
-                        : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
-                    }`}
-                  >
-                    Classica TV
-                  </button>
-                  <button
-                    onClick={() => setCameraMode('fps')}
-                    className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                      cameraMode === 'fps'
-                        ? 'bg-sky-400 text-stone-950'
-                        : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
-                    }`}
-                  >
-                    Prima Persona
-                  </button>
+            {/* Primary Match Configurator Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 mb-4">
+              {/* 1. Ruolo Calciatore */}
+              <div className="bg-stone-900/92 border border-stone-700/80 rounded-xl p-2.5">
+                <div className="text-[11px] font-semibold text-amber-300 mb-1 flex items-center justify-between">
+                  <span>1. Ruolo Calciatore</span>
+                  <Shield className="w-3.5 h-3.5" />
                 </div>
+                <select
+                  value={playerCategory}
+                  onChange={(e) => setPlayerCategory(e.target.value as PlayerCategoryId)}
+                  className="w-full bg-stone-800 text-stone-100 text-xs font-bold rounded-lg px-2 py-1.5 border border-stone-700 mb-1"
+                >
+                  {Object.values(PLAYER_CATEGORIES).map((cat) => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="text-[10px] text-stone-300 leading-tight">{currentRole.description}</div>
               </div>
 
-              <div className="bg-stone-900/90 border border-stone-700/80 rounded-xl p-3">
-                <div className="text-[11px] text-stone-400 mb-1.5">Pallone (Tasto B)</div>
+              {/* 2. Formato Squadre (1v1 .. 11v11) & Difficoltà Bot */}
+              <div className="bg-stone-900/92 border border-stone-700/80 rounded-xl p-2.5">
+                <div className="text-[11px] font-semibold text-sky-300 mb-1 flex items-center justify-between">
+                  <span>2. Squadre & Difficoltà Bot</span>
+                  <Users className="w-3.5 h-3.5" />
+                </div>
+                <div className="flex gap-1 mb-1.5">
+                  {TEAM_SIZE_OPTIONS.map((sz: TeamSize) => (
+                    <button
+                      key={sz}
+                      onClick={() => setTeamSize(sz)}
+                      className={`flex-1 py-1 text-[11px] font-extrabold rounded cursor-pointer ${
+                        teamSize === sz
+                          ? 'bg-sky-400 text-stone-950'
+                          : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                      }`}
+                    >
+                      {sz}v{sz}
+                    </button>
+                  ))}
+                </div>
+                <select
+                  value={botDifficulty}
+                  onChange={(e) => setBotDifficulty(e.target.value as BotDifficulty)}
+                  className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded-lg px-2 py-1 border border-stone-700"
+                >
+                  {Object.values(BOT_DIFFICULTIES).map((d) => (
+                    <option key={d.id} value={d.id}>
+                      Bot: {d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* 3. Campo da Gioco (con dimensioni reali) */}
+              <div className="bg-stone-900/92 border border-stone-700/80 rounded-xl p-2.5">
+                <div className="text-[11px] font-semibold text-emerald-300 mb-1 flex items-center justify-between">
+                  <span>3. Campo ({Math.round(effectiveDims.halfX * 2)}×{Math.round(effectiveDims.halfZ * 2)}m)</span>
+                  <Compass className="w-3.5 h-3.5" />
+                </div>
+                <select
+                  value={pitch}
+                  onChange={(e) => handlePitchChange(e.target.value as PitchId)}
+                  className="w-full bg-stone-800 text-stone-100 text-xs font-bold rounded-lg px-2 py-1.5 border border-stone-700 mb-1"
+                >
+                  {Object.values(PITCH_CONFIGS).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.dimensionsLabel})
+                    </option>
+                  ))}
+                </select>
+                <div className="text-[10px] text-stone-300 leading-tight truncate">{currentPitch.subtitle}</div>
+              </div>
+
+              {/* 4. Meteo, Giorno/Notte & Pallone */}
+              <div className="bg-stone-900/92 border border-stone-700/80 rounded-xl p-2.5">
+                <div className="text-[11px] font-semibold text-amber-300 mb-1 flex items-center justify-between">
+                  <span>4. Meteo, Orario & Palla</span>
+                  <Sun className="w-3.5 h-3.5" />
+                </div>
+                <div className="grid grid-cols-2 gap-1 mb-1">
+                  <select
+                    value={weather}
+                    onChange={(e) => handleWeatherChange(e.target.value as WeatherId)}
+                    className="bg-stone-800 text-stone-100 text-[11px] font-semibold rounded px-1.5 py-1 border border-stone-700"
+                  >
+                    {Object.values(WEATHER_CONFIGS).map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={timeOfDay}
+                    onChange={(e) => setTimeOfDay(e.target.value as TimeOfDayId)}
+                    className="bg-stone-800 text-stone-100 text-[11px] font-semibold rounded px-1.5 py-1 border border-stone-700"
+                  >
+                    <option value="giorno">Giorno</option>
+                    <option value="tramonto">Tramonto</option>
+                    <option value="notte">Notte</option>
+                  </select>
+                </div>
                 <select
                   value={ballProfile}
-                  onChange={(e) => setBallProfile(e.target.value as BallProfileId)}
-                  className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded-lg px-2.5 py-1.5 border border-stone-700 focus:outline-none"
+                  onChange={(e) => handleBallProfileChange(e.target.value as BallProfileId)}
+                  className="w-full bg-stone-800 text-stone-100 text-[11px] font-semibold rounded px-2 py-1 border border-stone-700"
                 >
                   {Object.values(BALL_PROFILES).map((b) => (
                     <option key={b.id} value={b.id}>
@@ -581,56 +870,39 @@ export default function App() {
                   ))}
                 </select>
               </div>
+            </div>
 
-              <div className="bg-stone-900/90 border border-stone-700/80 rounded-xl p-3">
-                <div className="text-[11px] text-stone-400 mb-1.5">Modalità Giocatori</div>
-                <select
-                  value={gameMode}
-                  onChange={(e) => {
-                    const val = e.target.value as GameMode;
-                    setGameMode(val);
-                    if (val === 'online_lan') {
-                      refreshNetworkInfo();
-                      setShowNetworkModal(true);
-                    }
-                  }}
-                  className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded-lg px-2.5 py-1.5 border border-stone-700 focus:outline-none"
-                >
-                  <option value="single">1P vs IA del Rione (3v3)</option>
-                  <option value="local_2p">2P Locale (Tastiera / 2 Pad)</option>
-                  <option value="online_lan">Online / LAN Stanza</option>
-                </select>
-              </div>
-
-              <div className="bg-stone-900/90 border border-stone-700/80 rounded-xl p-3">
-                <div className="text-[11px] text-stone-400 mb-1.5">Gag classiche</div>
-                <div className="flex gap-1.5">
-                  <button
-                    onClick={() => setGagsEnabled(true)}
-                    className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                      gagsEnabled
-                        ? 'bg-amber-500 text-stone-950'
-                        : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
-                    }`}
-                  >
-                    Sì
-                  </button>
-                  <button
-                    onClick={() => setGagsEnabled(false)}
-                    className={`flex-1 py-1.5 px-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
-                      !gagsEnabled
-                        ? 'bg-rose-500 text-stone-950'
-                        : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
-                    }`}
-                  >
-                    No
-                  </button>
+            {/* Mouse & Keyboard Controls Quick Reference Card */}
+            <div className="bg-stone-900/90 border border-stone-700/80 rounded-xl p-3 mb-4 text-xs">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                <div>
+                  <div className="font-bold text-amber-400 mb-0.5">
+                    QUANDO HAI LA PALLA (IN POSSESSO):
+                  </div>
+                  <div className="text-stone-200 text-[11px] leading-relaxed">
+                    • <strong>Click Sinistro Mouse</strong>: Passaggio rapido ·{' '}
+                    <strong>Tieni Premuto SX</strong>: Carica potenza tiro/passaggio e{' '}
+                    <span className="text-amber-300 font-semibold">mira direzione e altezza col Mouse mentre cammini</span>!<br />
+                    • <strong>Click Destro Mouse</strong>: Finta secca ·{' '}
+                    <strong>Tieni Premuto DX</strong>: Dribbling stretto (più tieni premuto, più dribbli ma rischi di farti rubare palla!).
+                  </div>
+                </div>
+                <div>
+                  <div className="font-bold text-sky-400 mb-0.5">
+                    QUANDO NON HAI LA PALLA (DIFESA & PORTIERE):
+                  </div>
+                  <div className="text-stone-200 text-[11px] leading-relaxed">
+                    • <strong>Click Destro Mouse</strong>: Scivolata ·{' '}
+                    <strong>Tieni Premuto DX</strong>: Scivolata violenta (prendi il tempo sulla palla: se colpisci l’uomo o entri da dietro è <strong>Fallo / Punizione con Barriera / Rigore</strong>!).<br />
+                    • <strong>Click Sinistro Mouse</strong>: Richiama marcatura ·{' '}
+                    <strong>Tieni Premuto SX</strong>: Uscita automatica del Portiere! (Se giochi Portiere e pari con le mani fuori area è <strong>Rigore</strong>!).
+                  </div>
                 </div>
               </div>
             </div>
 
             {/* Primary Start CTA */}
-            <div className="flex flex-wrap items-center gap-4">
+            <div className="flex flex-wrap items-center gap-3">
               <button
                 onClick={() => {
                   soundEngine.playWhistle(false);
@@ -638,137 +910,191 @@ export default function App() {
                   setIsPlaying(true);
                   setIsPaused(false);
                 }}
-                className="px-7 py-3.5 bg-amber-500 hover:bg-amber-400 text-stone-950 font-display text-2xl font-extrabold tracking-wide rounded-xl shadow-lg transition-transform active:scale-95 flex items-center gap-2.5 cursor-pointer"
+                className="px-7 py-3 bg-amber-500 hover:bg-amber-400 text-stone-950 font-display text-2xl font-extrabold tracking-wide rounded-xl shadow-lg transition-transform active:scale-95 flex items-center gap-2.5 cursor-pointer"
               >
                 <Play className="w-6 h-6 fill-stone-950" />
-                <span>SCENDI IN CORTILE (INVIO)</span>
+                <span>SCENDI IN CAMPO ({teamSize}v{teamSize})</span>
               </button>
 
-              <span className="text-xs text-stone-300">
-                {telemetry.connectedGamepads.length > 0
-                  ? `Controller Rilevato: ${telemetry.connectedGamepads[0]}`
-                  : 'Tastiera Prioritaria Attiva · Collega un Controller USB/Bluetooth in qualsiasi momento'}
-              </span>
+              <button
+                onClick={() => setCameraMode(cameraMode === 'classic' ? 'fps' : 'classic')}
+                className="px-4 py-3 bg-stone-900 hover:bg-stone-800 text-stone-100 border border-stone-700 font-semibold text-xs rounded-xl cursor-pointer"
+              >
+                Visuale: <strong className="text-amber-300">{cameraMode === 'fps' ? 'Prima Persona (FPS)' : 'Classica TV'}</strong> (Tasto C)
+              </button>
             </div>
           </div>
 
           {/* Flat Control-Hint Footer Line */}
-          <div className="flex flex-wrap items-center justify-between gap-4 text-xs text-stone-300 border-t border-stone-800/80 pt-3 pointer-events-auto">
+          <div className="flex flex-wrap items-center justify-between gap-4 text-xs text-stone-300 border-t border-stone-800/80 pt-2.5 pointer-events-auto">
             <div>
-              <strong className="text-amber-300">WASD</strong> Muovi ·{' '}
-              <strong className="text-amber-300">Shift</strong> Scatta ·{' '}
-              <strong className="text-amber-300">Spazio / J</strong> Tira (Carica) ·{' '}
-              <strong className="text-amber-300">K</strong> Passa / Cambia Uomo ·{' '}
-              <strong className="text-amber-300">L</strong> Cappello ·{' '}
-              <strong className="text-amber-300">C</strong> Visuale (FPS/TV) ·{' '}
-              <strong className="text-amber-300">F3</strong> Profiler FPS ·{' '}
-              <strong className="text-amber-300">Esc</strong> Pausa
+              <strong className="text-amber-300">WASD</strong> Cammina ·{' '}
+              <strong className="text-amber-300">Shift</strong> Corri ·{' '}
+              <strong className="text-amber-300">Spazio</strong> Salta / Colpo di Testa ·{' '}
+              <strong className="text-amber-300">Mouse SX / DX</strong> Tira, Passa, Finta, Dribbling, Scivolata, Marcatura ·{' '}
+              <strong className="text-amber-300">Tasti 1-4</strong> Urla in Campo ·{' '}
+              <strong className="text-amber-300">C</strong> Visuale
             </div>
             <div className="text-stone-400">
-              Licenza MIT (`/LICENSE` & `/README.md` inclusi) · Pronto per GitHub Pages, Itch.io & Android
+              OpenStreetFootball · Licenza MIT
             </div>
           </div>
         </div>
       )}
 
-      {/* 3. ACTIVE GAMEPLAY HUD (Low-Occlusion Perimeter + Collapsible Bottom Dock) */}
+      {/* 3. ACTIVE GAMEPLAY HUD */}
       {isPlaying && (
         <>
-          {/* Top-Center Street Scoreboard & Status Bar */}
-          <div className="fixed top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 px-4 py-2 bg-stone-950/92 border border-stone-700/90 rounded-xl shadow-lg pointer-events-auto">
-            <div className="flex items-center gap-2">
-              <span className="w-3 h-3 rounded-sm bg-sky-500 inline-block" />
-              <span className="font-display text-lg font-bold tracking-wide text-sky-400">AZZURRI</span>
-              <span className="font-mono-num text-2xl font-bold text-stone-100 px-1.5">
-                {telemetry.scoreBlue}
+          {/* Top-Center Comic-Book Sticker Timer & Scoreboard */}
+          <div className="fixed top-3 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center px-5 py-1.5 bg-[#fffbeb] border-3 border-black shadow-[4px_4px_0px_#09090b] text-stone-950 pointer-events-auto">
+            <div className="font-mono-num text-2xl sm:text-3xl font-black tracking-tight leading-none text-stone-950">
+              {formatClock(telemetry.timeRemaining)}
+            </div>
+            <div className="flex items-center gap-2 mt-1 text-xs sm:text-sm font-extrabold tracking-wide">
+              <span className="px-1.5 py-0.5 bg-[#38bdf8] border border-black text-stone-950">
+                AZZURRI {telemetry.scoreBlue}
               </span>
-            </div>
-
-            <div className="px-3 py-0.5 bg-stone-900 border border-stone-800 rounded-lg text-center">
-              <div className="font-mono-num text-base font-bold text-amber-400">
-                {formatClock(telemetry.timeRemaining)}
-              </div>
-              <div className="text-[10px] text-stone-400 whitespace-nowrap">
-                {telemetry.ballSpeedKmh} km/h · {currentBall.name}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="font-mono-num text-2xl font-bold text-stone-100 px-1.5">
-                {telemetry.scoreRed}
+              <span className="text-stone-950 font-black">·</span>
+              <span className="px-1.5 py-0.5 bg-[#facc15] border border-black text-stone-950">
+                {teamSize}v{teamSize} · PALI {telemetry.paliBlue}/{telemetry.paliRed}
               </span>
-              <span className="font-display text-lg font-bold tracking-wide text-rose-400">RIVALI</span>
-              <span className="w-3 h-3 rounded-sm bg-rose-500 inline-block" />
-            </div>
-
-            <div className="hidden md:flex items-center gap-2 pl-2 border-l border-stone-800 text-xs text-stone-300">
-              <span>Pali: {telemetry.paliBlue}-{telemetry.paliRed}</span>
-              <span>·</span>
-              <span>Stile: +{telemetry.stylePointsBlue}</span>
-            </div>
-
-            <div className="flex items-center gap-1.5 pl-2 border-l border-stone-800">
-              <button
-                onClick={() => setCameraMode(cameraMode === 'classic' ? 'fps' : 'classic')}
-                title="Cambia Visuale (Tasto C)"
-                className="px-2.5 py-1 text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-md transition-colors flex items-center gap-1 cursor-pointer whitespace-nowrap"
-              >
-                <Camera className="w-3.5 h-3.5" />
-                <span>{cameraMode === 'fps' ? 'FPS POV' : 'TV Lontano'}</span>
-              </button>
-
-              <button
-                onClick={() => setShowTouchControls((prev) => !prev)}
-                title="Mostra/Nascondi Comandi Touch Android"
-                className={`p-1.5 rounded-md border transition-colors cursor-pointer ${
-                  showTouchControls
-                    ? 'bg-sky-500/25 border-sky-400 text-sky-300'
-                    : 'bg-stone-900 border-stone-700 text-stone-400 hover:text-stone-200'
-                }`}
-              >
-                <Smartphone className="w-3.5 h-3.5" />
-              </button>
-
-              <button
-                onClick={toggleMute}
-                className="p-1.5 bg-stone-900 hover:bg-stone-800 text-stone-300 border border-stone-700 rounded-md transition-colors cursor-pointer"
-              >
-                {muted ? <VolumeX className="w-3.5 h-3.5 text-rose-400" /> : <Volume2 className="w-3.5 h-3.5" />}
-              </button>
-
-              <button
-                onClick={() => setIsPaused((prev) => !prev)}
-                className="p-1.5 bg-stone-900 hover:bg-stone-800 text-stone-300 border border-stone-700 rounded-md transition-colors cursor-pointer"
-              >
-                <Pause className="w-3.5 h-3.5" />
-              </button>
+              <span className="text-stone-950 font-black">·</span>
+              <span className="px-1.5 py-0.5 bg-[#fb7185] border border-black text-stone-950">
+                {telemetry.scoreRed} RIVALI
+              </span>
             </div>
           </div>
 
-          {/* FPS Crosshair & Power Charge Indicator */}
-          {cameraMode === 'fps' && !isPaused && (
-            <div className="fixed inset-0 pointer-events-none flex flex-col items-center justify-center z-10">
-              <div className="w-6 h-6 rounded-full border-2 border-amber-400/80 flex items-center justify-center">
-                <div className="w-1.5 h-1.5 rounded-full bg-amber-300" />
-              </div>
-              {!telemetry.pointerLocked && (
-                <div className="mt-3 px-2.5 py-1 bg-stone-950/85 border border-stone-700 rounded text-[11px] text-amber-300">
-                  Clicca sul campo per ruotare la visuale col Mouse (oppure usa Q/R o lo Stick Destro)
-                </div>
-              )}
+          {/* Top-Right Action Strip + Randomize Button */}
+          <div className="fixed top-3 right-3 z-10 flex items-center gap-1.5 px-3 py-1.5 bg-[#fde047] border-2 border-black shadow-[3px_3px_0px_#09090b] text-stone-950 pointer-events-auto">
+            <button
+              onClick={handleRandomizeAll}
+              title="Tutto a Caso (Campo, Meteo, Pallone, Squadre)"
+              className="px-2 py-0.5 text-xs font-black uppercase bg-[#fffbeb] hover:bg-white text-stone-950 border-2 border-black flex items-center gap-1 cursor-pointer whitespace-nowrap"
+            >
+              <Dices className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">CASO</span>
+            </button>
+
+            <button
+              onClick={() => setCameraMode(cameraMode === 'classic' ? 'fps' : 'classic')}
+              title="Cambia Visuale (Tasto C)"
+              className="px-2 py-0.5 text-xs font-black uppercase bg-[#fffbeb] hover:bg-white text-stone-950 border-2 border-black flex items-center gap-1 cursor-pointer whitespace-nowrap"
+            >
+              <Camera className="w-3.5 h-3.5" />
+              <span>{cameraMode === 'fps' ? 'FPS POV' : 'TV CAM'}</span>
+            </button>
+
+            <button
+              onClick={() => setShowTouchControls((prev) => !prev)}
+              title="Mostra/Nascondi Comandi Touch"
+              className={`p-1 border-2 border-black cursor-pointer ${
+                showTouchControls ? 'bg-[#38bdf8] text-stone-950' : 'bg-[#fffbeb] text-stone-950 hover:bg-white'
+              }`}
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+            </button>
+
+            <button
+              onClick={toggleMute}
+              className="p-1 bg-[#fffbeb] hover:bg-white text-stone-950 border-2 border-black cursor-pointer"
+            >
+              {muted ? <VolumeX className="w-3.5 h-3.5 text-rose-600" /> : <Volume2 className="w-3.5 h-3.5" />}
+            </button>
+
+            <button
+              onClick={() => setIsPaused((prev) => !prev)}
+              className="p-1 bg-[#fffbeb] hover:bg-white text-stone-950 border-2 border-black cursor-pointer"
+            >
+              <Pause className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Left-Side Voice Shouts ("Esclamare / Urlare in Campo" — Tasti 1, 2, 3, 4) */}
+          <div className="fixed left-3 top-1/2 -translate-y-1/2 z-10 hidden md:flex flex-col gap-1.5 pointer-events-auto">
+            <div className="px-2 py-0.5 bg-[#facc15] border-2 border-black text-stone-950 text-[10px] font-black uppercase flex items-center gap-1 shadow-[2px_2px_0px_#09090b]">
+              <Megaphone className="w-3 h-3" />
+              <span>Urla (1-4)</span>
+            </div>
+            {Object.values(VOICE_SHOUTS).map((sh) => (
+              <button
+                key={sh.id}
+                onClick={() => setTriggerShoutRequest({ shout: sh.id, seq: Date.now() })}
+                className="px-2.5 py-1 bg-[#fffbeb] hover:bg-[#fde047] text-stone-950 border-2 border-black shadow-[3px_3px_0px_#09090b] text-[11px] font-black text-left cursor-pointer transition-transform active:scale-95"
+              >
+                [{sh.key}] {sh.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Bottom-Right Live Role, Ball & Context-Sensitive Mouse Guide Sticker */}
+          <div className="fixed bottom-3 right-3 z-10 hidden xl:flex flex-col items-end px-3.5 py-2 bg-[#fffbeb] border-2 border-black shadow-[3px_3px_0px_#09090b] text-stone-950 font-mono-num text-[11px] font-black uppercase pointer-events-none max-w-xs">
+            <div className="flex items-center gap-1.5">
+              <span className="px-1.5 py-0.2 bg-[#38bdf8] border border-black text-stone-950">
+                {currentRole.name}
+              </span>
+              <span>· {currentBall.name}</span>
+              <span className="px-1.5 py-0.2 bg-[#facc15] border border-black text-stone-950">
+                {telemetry.ballSpeedKmh} KM/H
+              </span>
+            </div>
+            <div className="text-[10px] font-extrabold text-stone-800 mt-1 text-right">
+              {telemetry.hasBall
+                ? 'CON PALLA: [SX] Passa / Tieni SX Carica+Mira · [DX] Finta / Tieni DX Dribbling'
+                : 'SENZA PALLA: [DX] Scivolata (Tieni DX Violenta) · [SX] Marcatura (Tieni SX Uscita Portiere)'}
+            </div>
+            <div className="text-[10px] font-bold text-stone-600">
+              [SPAZIO] Salta · [SHIFT] Corri · [K] Cambia Uomo
+            </div>
+          </div>
+
+          {/* Comic Speech Bubble when a player shouts ("PASSALA!", "TIRO IO!", "UOMO!", "FALLO!") */}
+          {telemetry.activeShout && (
+            <div className="fixed top-20 right-8 z-20 px-4 py-2 bg-white text-stone-950 font-display text-xl font-black tracking-wide border-3 border-black rounded-2xl shadow-[4px_4px_0px_#09090b] pointer-events-none">
+              💬 &ldquo;{telemetry.activeShout.text}&rdquo;
             </div>
           )}
 
-          {/* Shot Power Charge Bar */}
+          {/* Set-Piece Active Badge (Punizione con Barriera / Calcio di Rigore) */}
+          {telemetry.setPieceState && (
+            <div className="fixed top-20 left-1/2 -translate-x-1/2 z-20 px-5 py-1.5 bg-rose-500 text-white font-display text-2xl font-black tracking-wider border-3 border-black shadow-[4px_4px_0px_#09090b] pointer-events-none">
+              ⚽ {telemetry.setPieceState} — MIRA COL MOUSE E CALCIA CON CLICK SINISTRO!
+            </div>
+          )}
+
+          {/* Shot Power Charge Bar (LMB held) */}
           {telemetry.shootCharge > 0.02 && (
-            <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-10 w-44 bg-stone-950/90 border border-stone-700 rounded-lg p-1.5 pointer-events-none">
-              <div className="text-[10px] font-bold text-amber-300 text-center mb-1">
-                POTENZA TIRO ({Math.round(telemetry.shootCharge * 100)}%)
+            <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-10 w-56 bg-[#fffbeb] border-3 border-black shadow-[4px_4px_0px_#09090b] p-1.5 pointer-events-none">
+              <div className="text-[11px] font-black text-stone-950 text-center mb-1 uppercase">
+                {telemetry.hasBall
+                  ? `POTENZA TIRO / PASSAGGIO (${Math.round(telemetry.shootCharge * 100)}%)`
+                  : 'USCITA PORTIERE ATTIVA!'}
               </div>
-              <div className="w-full h-2.5 bg-stone-800 rounded overflow-hidden">
+              <div className="w-full h-3 bg-white border-2 border-black overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500"
+                  className="h-full bg-[#facc15]"
                   style={{ width: `${Math.round(telemetry.shootCharge * 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Dribble Exposure / Violent Slide Charge Bar (RMB held) */}
+          {(telemetry.dribbleExposure > 0.05 || telemetry.rightHoldCharge > 0.08) && (
+            <div className="fixed bottom-40 left-1/2 -translate-x-1/2 z-10 w-56 bg-[#fffbeb] border-3 border-black shadow-[4px_4px_0px_#09090b] p-1.5 pointer-events-none">
+              <div className="text-[11px] font-black text-stone-950 text-center mb-1 uppercase">
+                {telemetry.hasBall
+                  ? `DRIBBLING STRETTO · RISCHIO FURTO (${Math.round(telemetry.dribbleExposure * 100)}%)`
+                  : `CARICA SCIVOLATA VIOLENTA (${Math.round(telemetry.rightHoldCharge * 100)}%)`}
+              </div>
+              <div className="w-full h-3 bg-white border-2 border-black overflow-hidden">
+                <div
+                  className="h-full bg-rose-500"
+                  style={{
+                    width: `${Math.round(
+                      (telemetry.hasBall ? telemetry.dribbleExposure : telemetry.rightHoldCharge) * 100,
+                    )}%`,
+                  }}
                 />
               </div>
             </div>
@@ -776,18 +1102,18 @@ export default function App() {
 
           {/* Short Street Trick Popup ("TUNNEL +1" / "CAPPELLO +1") */}
           {telemetry.trickPopup && (
-            <div className="fixed top-16 left-1/2 -translate-x-1/2 z-20 px-5 py-1.5 bg-emerald-500 text-stone-950 font-display text-2xl font-extrabold tracking-wider rounded-xl shadow-lg border-2 border-amber-300 pointer-events-none">
+            <div className="fixed top-20 left-1/2 -translate-x-1/2 z-20 px-5 py-1.5 bg-[#facc15] text-stone-950 font-display text-2xl font-black tracking-wider border-3 border-black shadow-[4px_4px_0px_#09090b] pointer-events-none">
               {telemetry.trickPopup.label} ({telemetry.trickPopup.team === 'blue' ? 'AZZURRI' : 'RIVALI'})
             </div>
           )}
 
-          {/* Gag or Goal Dynamic Notification Toast */}
+          {/* Gag, Goal, or Referee Foul Dynamic Notification Toast */}
           {(telemetry.activeGag || telemetry.lastBanner) && (
-            <div className="fixed top-28 left-1/2 -translate-x-1/2 z-10 max-w-md w-[92vw] px-4 py-3 bg-stone-950/95 border border-amber-500/70 rounded-xl shadow-xl text-center pointer-events-none">
-              <div className="font-display text-xl font-extrabold tracking-wide text-amber-400">
+            <div className="fixed top-28 left-1/2 -translate-x-1/2 z-10 max-w-md w-[92vw] px-4 py-3 bg-[#fffbeb] border-3 border-black shadow-[5px_5px_0px_#09090b] text-center pointer-events-none">
+              <div className="font-display text-2xl font-black tracking-wide text-stone-950 uppercase">
                 {telemetry.activeGag ? telemetry.activeGag.title : telemetry.lastBanner?.title}
               </div>
-              <div className="text-xs text-stone-200 mt-0.5">
+              <div className="text-xs font-bold text-stone-800 mt-0.5">
                 {telemetry.activeGag ? telemetry.activeGag.subtitle : telemetry.lastBanner?.subtitle}
               </div>
             </div>
@@ -853,11 +1179,11 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => {
-                    if (inputManagerRef.current) inputManagerRef.current.touchLobJustPressed = true;
+                    if (inputManagerRef.current) inputManagerRef.current.touchJumpJustPressed = true;
                   }}
                   className="w-16 h-16 rounded-2xl bg-amber-500 active:bg-amber-400 text-stone-950 font-display font-bold text-sm border border-amber-300 shadow-lg"
                 >
-                  CAPPELLO
+                  SALTA
                 </button>
                 <button
                   onClick={() => {
@@ -876,7 +1202,7 @@ export default function App() {
                   }}
                   className="w-16 h-16 rounded-2xl bg-emerald-600 active:bg-emerald-500 text-white font-display font-bold text-sm border border-emerald-300 shadow-lg"
                 >
-                  SCATTA
+                  CORRI
                 </button>
               </div>
             </div>
@@ -884,7 +1210,7 @@ export default function App() {
 
           {/* Unified Collapsible Bottom Control Dock */}
           <div
-            className="fixed bottom-3 left-1/2 -translate-x-1/2 z-10 w-[min(940px,95vw)] transition-transform duration-200 pointer-events-auto"
+            className="fixed bottom-3 left-1/2 -translate-x-1/2 z-10 w-[min(960px,95vw)] transition-transform duration-200 pointer-events-auto"
             style={{
               transform: dockCollapsed ? 'translate(-50%, calc(100% - 34px))' : 'translate(-50%, 0)',
             }}
@@ -897,7 +1223,7 @@ export default function App() {
                 {dockCollapsed ? (
                   <>
                     <ChevronUp className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Mostra Regia Cortile (H)</span>
+                    <span>Mostra Regia Partita (H)</span>
                   </>
                 ) : (
                   <>
@@ -912,14 +1238,14 @@ export default function App() {
               <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 mb-2.5 border-b border-stone-800">
                 <div className="flex items-center gap-1 bg-stone-900 p-1 rounded-lg">
                   <button
-                    onClick={() => setActiveDockTab('pallone')}
+                    onClick={() => setActiveDockTab('ruolo')}
                     className={`px-3 py-1 text-xs font-semibold rounded-md transition-colors cursor-pointer whitespace-nowrap ${
-                      activeDockTab === 'pallone'
+                      activeDockTab === 'ruolo'
                         ? 'bg-amber-500 text-stone-950'
                         : 'text-stone-300 hover:text-white'
                     }`}
                   >
-                    1. Pallone & Visuale
+                    1. Ruolo, Squadre & Pallone
                   </button>
                   <button
                     onClick={() => setActiveDockTab('ambiente')}
@@ -929,7 +1255,7 @@ export default function App() {
                         : 'text-stone-300 hover:text-white'
                     }`}
                   >
-                    2. Meteo, Campo & Regole
+                    2. Campi, Meteo & Giorno/Notte
                   </button>
                   <button
                     onClick={() => setActiveDockTab('gag')}
@@ -939,7 +1265,7 @@ export default function App() {
                         : 'text-stone-300 hover:text-white'
                     }`}
                   >
-                    3. Gag del Cortile
+                    3. Gag & Urla Voce
                   </button>
                   <button
                     onClick={() => setActiveDockTab('rete')}
@@ -955,6 +1281,13 @@ export default function App() {
 
                 <div className="flex items-center gap-2">
                   <button
+                    onClick={handleRandomizeAll}
+                    className="px-2.5 py-1 text-xs font-bold bg-amber-500 hover:bg-amber-400 text-stone-950 rounded-md flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                  >
+                    <Dices className="w-3.5 h-3.5" />
+                    <span>Tutto a Caso</span>
+                  </button>
+                  <button
                     onClick={() => {
                       startNewMatchWithSeed();
                       setResetMatchSeq((s) => s + 1);
@@ -965,107 +1298,100 @@ export default function App() {
                     <span>Palla al Centro</span>
                   </button>
                   <button
-                    onClick={() => setShowReleaseModal(true)}
-                    className="px-2.5 py-1 text-xs font-semibold bg-emerald-950 hover:bg-emerald-900 text-emerald-200 border border-emerald-700/70 rounded-md flex items-center gap-1 cursor-pointer whitespace-nowrap"
-                  >
-                    <Share2 className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Open Source</span>
-                  </button>
-                  <button
                     onClick={() => setShowControlsModal(true)}
                     className="px-2.5 py-1 text-xs font-semibold bg-stone-800 hover:bg-stone-700 text-stone-200 rounded-md flex items-center gap-1 cursor-pointer whitespace-nowrap"
                   >
                     <Gamepad2 className="w-3.5 h-3.5 text-sky-400" />
-                    <span>Tasti</span>
+                    <span>Comandi Mouse</span>
                   </button>
                 </div>
               </div>
 
-              {/* Tab 1: Ball Profiles & Camera Mode */}
-              {activeDockTab === 'pallone' && (
-                <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
-                  <div className="md:col-span-8 grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {Object.values(BALL_PROFILES).map((b) => (
-                      <button
-                        key={b.id}
-                        onClick={() => setBallProfile(b.id)}
-                        className={`p-2 rounded-lg border text-left transition-colors cursor-pointer ${
-                          ballProfile === b.id
-                            ? 'bg-amber-500/20 border-amber-400 text-stone-100'
-                            : 'bg-stone-900 border-stone-800 text-stone-400 hover:border-stone-700'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-stone-100 truncate">{b.name}</span>
-                          <span
-                            className="w-3 h-3 rounded-full shrink-0 border border-white/20"
-                            style={{ backgroundColor: b.primaryColor }}
-                          />
-                        </div>
-                        <div className="text-[10px] text-stone-400 mt-0.5">
-                          {b.mass}kg · Rimbalzo {Math.round(b.restitution * 100)}%
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="md:col-span-4 flex flex-col gap-1.5 bg-stone-900 p-2.5 rounded-lg border border-stone-800">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-stone-300">Visuale Telecamera (C)</span>
-                      <div className="flex gap-1">
-                        <button
-                          onClick={() => setCameraMode('classic')}
-                          className={`px-2.5 py-1 text-xs font-semibold rounded cursor-pointer ${
-                            cameraMode === 'classic'
-                              ? 'bg-amber-500 text-stone-950'
-                              : 'bg-stone-800 text-stone-300'
-                          }`}
-                        >
-                          Classica TV
-                        </button>
-                        <button
-                          onClick={() => setCameraMode('fps')}
-                          className={`px-2.5 py-1 text-xs font-semibold rounded cursor-pointer ${
-                            cameraMode === 'fps'
-                              ? 'bg-sky-400 text-stone-950'
-                              : 'bg-stone-800 text-stone-300'
-                          }`}
-                        >
-                          Prima Persona FPS
-                        </button>
-                      </div>
-                    </div>
-                    <p className="text-[11px] text-stone-400 truncate">{currentBall.subtitle}</p>
-                  </div>
-                </div>
-              )}
-
-              {/* Tab 2: Weather, Pitch & Street Rules */}
-              {activeDockTab === 'ambiente' && (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="bg-stone-900 p-2.5 rounded-lg border border-stone-800">
-                    <label className="block text-[11px] text-stone-400 mb-1 flex items-center gap-1">
-                      <CloudRain className="w-3.5 h-3.5 text-sky-400" />
-                      <span>Condizione Meteo ({currentWeather.name})</span>
+              {/* Tab 1: Player Category, Team Size (1v1..11v11), Bot Difficulty & Ball Profile */}
+              {activeDockTab === 'ruolo' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                  <div className="bg-stone-900 p-2 rounded-lg border border-stone-800">
+                    <label className="block text-[11px] text-amber-300 font-semibold mb-1">
+                      Ruolo Calciatore ({currentRole.name})
                     </label>
                     <select
-                      value={weather}
-                      onChange={(e) => handleWeatherChange(e.target.value as WeatherId)}
-                      className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded px-2.5 py-1.5 border border-stone-700"
+                      value={playerCategory}
+                      onChange={(e) => setPlayerCategory(e.target.value as PlayerCategoryId)}
+                      className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded px-2 py-1 border border-stone-700"
                     >
-                      {Object.values(WEATHER_CONFIGS).map((w) => (
-                        <option key={w.id} value={w.id}>
-                          {w.name}
+                      {Object.values(PLAYER_CATEGORIES).map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
                         </option>
                       ))}
                     </select>
                   </div>
 
-                  <div className="bg-stone-900 p-2.5 rounded-lg border border-stone-800">
+                  <div className="bg-stone-900 p-2 rounded-lg border border-stone-800">
+                    <label className="block text-[11px] text-sky-300 font-semibold mb-1">
+                      Formato Squadre (da 1v1 a 11v11)
+                    </label>
+                    <div className="flex gap-1">
+                      {TEAM_SIZE_OPTIONS.map((sz: TeamSize) => (
+                        <button
+                          key={sz}
+                          onClick={() => setTeamSize(sz)}
+                          className={`flex-1 py-1 text-[11px] font-bold rounded cursor-pointer ${
+                            teamSize === sz
+                              ? 'bg-sky-400 text-stone-950'
+                              : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                          }`}
+                        >
+                          {sz}v{sz}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-stone-900 p-2 rounded-lg border border-stone-800">
+                    <label className="block text-[11px] text-emerald-300 font-semibold mb-1">
+                      Difficoltà Bot IA
+                    </label>
+                    <select
+                      value={botDifficulty}
+                      onChange={(e) => setBotDifficulty(e.target.value as BotDifficulty)}
+                      className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded px-2 py-1 border border-stone-700"
+                    >
+                      {Object.values(BOT_DIFFICULTIES).map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="bg-stone-900 p-2 rounded-lg border border-stone-800">
+                    <label className="block text-[11px] text-stone-300 font-semibold mb-1">
+                      Pallone ({currentBall.name})
+                    </label>
+                    <select
+                      value={ballProfile}
+                      onChange={(e) => handleBallProfileChange(e.target.value as BallProfileId)}
+                      className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded px-2 py-1 border border-stone-700"
+                    >
+                      {Object.values(BALL_PROFILES).map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {/* Tab 2: Pitches, Weather, Time of Day & Street Rules */}
+              {activeDockTab === 'ambiente' && (
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                  <div className="bg-stone-900 p-2 rounded-lg border border-stone-800">
                     <div className="flex items-center justify-between mb-1">
-                      <label className="text-[11px] text-stone-400 flex items-center gap-1">
-                        <Compass className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Campo ({currentPitch.name})</span>
+                      <label className="text-[11px] text-amber-300 font-semibold flex items-center gap-1">
+                        <Compass className="w-3.5 h-3.5" />
+                        <span>Campo ({Math.round(effectiveDims.halfX * 2)}×{Math.round(effectiveDims.halfZ * 2)}m)</span>
                       </label>
                       {pitch === 'spiaggia' && (
                         <button
@@ -1075,38 +1401,74 @@ export default function App() {
                             soundEngine.wavesEnabled = next;
                             soundEngine.setBeachWavesActive(isPlaying && !isPaused && next);
                           }}
-                          className={`px-2 py-0.5 text-[10px] font-semibold rounded border cursor-pointer ${
-                            beachWavesEnabled
-                              ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
-                              : 'bg-stone-800 text-stone-400 border-stone-700'
-                          }`}
+                          className="px-1.5 py-0.2 text-[9px] font-semibold rounded border border-sky-500/40 bg-sky-500/20 text-sky-300 cursor-pointer"
                         >
-                          Onde mare: {beachWavesEnabled ? 'Sì' : 'No'}
+                          Onde: {beachWavesEnabled ? 'Sì' : 'No'}
                         </button>
                       )}
                     </div>
                     <select
                       value={pitch}
-                      onChange={(e) => setPitch(e.target.value as PitchId)}
-                      className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded px-2.5 py-1.5 border border-stone-700"
+                      onChange={(e) => handlePitchChange(e.target.value as PitchId)}
+                      className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded px-2 py-1 border border-stone-700"
                     >
                       {Object.values(PITCH_CONFIGS).map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.name}
+                          {p.name} ({p.dimensionsLabel})
                         </option>
                       ))}
                     </select>
                   </div>
 
-                  <div className="bg-stone-900 p-2.5 rounded-lg border border-stone-800">
-                    <label className="block text-[11px] text-stone-400 mb-1 flex items-center gap-1">
-                      <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Regolamento da Strada + Bonus (+1)</span>
+                  <div className="bg-stone-900 p-2 rounded-lg border border-stone-800">
+                    <label className="block text-[11px] text-sky-300 font-semibold mb-1 flex items-center gap-1">
+                      <CloudRain className="w-3.5 h-3.5" />
+                      <span>Meteo ({currentWeather.name})</span>
+                    </label>
+                    <select
+                      value={weather}
+                      onChange={(e) => handleWeatherChange(e.target.value as WeatherId)}
+                      className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded px-2 py-1 border border-stone-700"
+                    >
+                      {Object.values(WEATHER_CONFIGS).map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="bg-stone-900 p-2 rounded-lg border border-stone-800">
+                    <label className="block text-[11px] text-amber-300 font-semibold mb-1 flex items-center gap-1">
+                      <Sun className="w-3.5 h-3.5" />
+                      <span>Giorno / Tramonto / Notte</span>
+                    </label>
+                    <div className="flex gap-1">
+                      {(['giorno', 'tramonto', 'notte'] as TimeOfDayId[]).map((tod) => (
+                        <button
+                          key={tod}
+                          onClick={() => setTimeOfDay(tod)}
+                          className={`flex-1 py-1 text-[11px] font-bold rounded capitalize cursor-pointer ${
+                            timeOfDay === tod
+                              ? 'bg-amber-500 text-stone-950'
+                              : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                          }`}
+                        >
+                          {tod}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-stone-900 p-2 rounded-lg border border-stone-800">
+                    <label className="block text-[11px] text-emerald-300 font-semibold mb-1 flex items-center gap-1">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Regolamento & Tricks</span>
                     </label>
                     <select
                       value={streetRule}
-                      onChange={(e) => setStreetRule(e.target.value as StreetRuleId)}
-                      className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded px-2.5 py-1.5 border border-stone-700 mb-1.5"
+                      onChange={(e) => handleStreetRuleChange(e.target.value as StreetRuleId)}
+                      className="w-full bg-stone-800 text-stone-100 text-xs font-semibold rounded px-2 py-1 border border-stone-700 mb-1"
                     >
                       {Object.values(STREET_RULES).map((r) => (
                         <option key={r.id} value={r.id}>
@@ -1115,20 +1477,20 @@ export default function App() {
                       ))}
                     </select>
                     <div className="flex items-center gap-2">
-                      <label className="flex items-center gap-1.5 text-[11px] font-semibold text-stone-200 cursor-pointer">
+                      <label className="flex items-center gap-1 text-[10px] font-semibold text-stone-200 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={ruleTunnelEnabled}
-                          onChange={(e) => setRuleTunnelEnabled(e.target.checked)}
+                          onChange={(e) => handleTunnelRuleToggle(e.target.checked)}
                           className="rounded accent-emerald-500"
                         />
                         <span>Tunnel (+1)</span>
                       </label>
-                      <label className="flex items-center gap-1.5 text-[11px] font-semibold text-stone-200 cursor-pointer">
+                      <label className="flex items-center gap-1 text-[10px] font-semibold text-stone-200 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={ruleCappelloEnabled}
-                          onChange={(e) => setRuleCappelloEnabled(e.target.checked)}
+                          onChange={(e) => handleCappelloRuleToggle(e.target.checked)}
                           className="rounded accent-emerald-500"
                         />
                         <span>Cappello (+1)</span>
@@ -1138,42 +1500,31 @@ export default function App() {
                 </div>
               )}
 
-              {/* Tab 3: Courtyard / Beach Gags & Interactive Triggers (filtered by current pitch) */}
+              {/* Tab 3: Gags & Voice Shouts */}
               {activeDockTab === 'gag' && (
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-stone-200">Gag classiche:</span>
-                    <div className="inline-flex rounded-lg border border-stone-700 overflow-hidden">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs font-semibold text-amber-300 mr-1">Urla in Campo:</span>
+                    {Object.values(VOICE_SHOUTS).map((sh) => (
                       <button
-                        onClick={() => setGagsEnabled(true)}
-                        className={`px-2.5 py-1 text-xs font-semibold cursor-pointer ${
-                          gagsEnabled ? 'bg-amber-500 text-stone-950' : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
-                        }`}
+                        key={sh.id}
+                        onClick={() => setTriggerShoutRequest({ shout: sh.id, seq: Date.now() })}
+                        className="px-2.5 py-1 text-xs font-bold bg-sky-950 hover:bg-sky-900 text-sky-200 border border-sky-700/70 rounded-lg cursor-pointer"
                       >
-                        Sì
+                        [{sh.key}] {sh.label}
                       </button>
-                      <button
-                        onClick={() => setGagsEnabled(false)}
-                        className={`px-2.5 py-1 text-xs font-semibold cursor-pointer ${
-                          !gagsEnabled ? 'bg-rose-500 text-stone-950' : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
-                        }`}
-                      >
-                        No
-                      </button>
-                    </div>
-                    <span className="text-[11px] text-stone-400 hidden lg:inline">
-                      (Gag disponibili su {currentPitch.name}:)
-                    </span>
+                    ))}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-xs font-semibold text-stone-300">Gag:</span>
                     {Object.values(GAG_CONFIGS)
                       .filter((g) => g.allowedPitches.includes(pitch))
                       .map((g) => (
                         <button
                           key={g.id}
                           onClick={() => setTriggerGagRequest({ gag: g.id, seq: Date.now() })}
-                          className="px-2.5 py-1.5 text-xs font-semibold bg-amber-950/90 hover:bg-amber-900 text-amber-200 border border-amber-700/70 rounded-lg cursor-pointer whitespace-nowrap"
+                          className="px-2.5 py-1 text-xs font-semibold bg-amber-950/90 hover:bg-amber-900 text-amber-200 border border-amber-700/70 rounded-lg cursor-pointer whitespace-nowrap"
                         >
                           {g.label}
                         </button>
@@ -1203,7 +1554,7 @@ export default function App() {
                             : 'bg-stone-900 text-stone-300 border border-stone-800'
                         }`}
                       >
-                        {m === 'single' ? '1P vs IA' : m === 'local_2p' ? '2P Locale' : 'Online / LAN'}
+                        {m === 'single' ? '1P vs Bot IA' : m === 'local_2p' ? '2P Locale' : 'Online / LAN'}
                       </button>
                     ))}
 
@@ -1271,7 +1622,7 @@ export default function App() {
           <div className="bg-stone-900 border border-stone-700 rounded-2xl max-w-md w-full p-6 shadow-2xl">
             <h2 className="font-display text-3xl font-extrabold text-amber-400 mb-1">PARTITA IN PAUSA</h2>
             <p className="text-xs text-stone-400 mb-5">
-              {currentPitch.name} · {currentBall.name} · {STREET_RULES[streetRule].name}
+              {currentPitch.name} ({teamSize}v{teamSize}) · {currentRole.name} · {currentBall.name}
             </p>
 
             <div className="space-y-2.5 mb-6">
@@ -1313,7 +1664,7 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <Globe className="w-5 h-5 text-amber-400" />
                 <h2 className="font-display text-2xl font-extrabold text-stone-100">
-                  MULTIPLAYER ONLINE, LAN & LOCALE
+                  MULTIPLAYER ONLINE, LAN & BOT FILL
                 </h2>
               </div>
               <button
@@ -1326,7 +1677,7 @@ export default function App() {
 
             <div className="space-y-4 text-xs">
               <div>
-                <label className="block text-stone-400 mb-1">Il tuo Soprannome in Cortile</label>
+                <label className="block text-stone-400 mb-1">Il tuo Soprannome in Campo</label>
                 <input
                   type="text"
                   value={playerName}
@@ -1335,16 +1686,23 @@ export default function App() {
                 />
               </div>
 
+              <div className="p-3 bg-stone-950 border border-stone-800 rounded-xl text-stone-300">
+                Formato scelto: <strong className="text-amber-300">{teamSize} contro {teamSize}</strong>. Se i giocatori
+                umani connessi non riempiono tutti i posti, gli slot rimanenti vengono completati in automatico dai{' '}
+                <strong className="text-sky-300">Bot IA ({BOT_DIFFICULTIES[botDifficulty].name})</strong>!
+              </div>
+
               {onlineRoomCode ? (
                 <div className="p-3.5 bg-emerald-950/60 border border-emerald-600/60 rounded-xl">
-                  <div className="text-emerald-300 font-bold text-sm">
-                    Stanza Attiva: <span className="font-mono-num text-lg">{onlineRoomCode}</span>{' '}
-                    ({isOnlineHost ? 'Sei l’Host Autoritativo' : 'Connesso come Sfidante'})
+                  <div className="flex items-center justify-between">
+                    <div className="text-emerald-300 font-bold text-sm">
+                      Stanza Attiva: <span className="font-mono-num text-lg">{onlineRoomCode}</span>{' '}
+                      ({isOnlineHost ? 'Sei l’Host Autoritativo' : 'Connesso come Sfidante'})
+                    </div>
+                    <span className="text-[11px] font-mono-num text-sky-300">
+                      Umani: {roomPlayerCount} · Ping: {pingMs}ms
+                    </span>
                   </div>
-                  <p className="text-stone-300 mt-1">
-                    Condividi il codice <strong>{onlineRoomCode}</strong> con un amico sul browser o sulla stessa
-                    rete Wi-Fi/LAN!
-                  </p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1415,36 +1773,25 @@ export default function App() {
                 )}
               </div>
 
-              <div className="bg-stone-950 border border-stone-800 rounded-xl p-3 text-stone-400">
-                <div className="font-semibold text-stone-200 mb-1">
-                  Connessione Diretta LAN / Smartphone Android sulla stessa Wi-Fi:
+              {lanIps.length > 0 && (
+                <div className="bg-stone-950 border border-stone-800 rounded-xl p-3 text-stone-400">
+                  Indirizzo LAN Wi-Fi: <strong className="font-mono-num text-amber-300">http://{lanIps[0]}:3000</strong>
                 </div>
-                <div>
-                  Stato WebSocket: <strong className="text-emerald-400">{wsConnected ? 'Connesso' : 'Modalità Statica / Offline'}</strong>
-                  {lanIps.length > 0 && (
-                    <span className="ml-2 font-mono-num text-amber-300">
-                      Indirizzo LAN: http://{lanIps[0]}:3000
-                    </span>
-                  )}
-                </div>
-              </div>
+              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* 6. OPEN-SOURCE RELEASE, PERFORMANCE & COMMUNITY HUB MODAL */}
+      {/* 6. OPEN-SOURCE RELEASE MODAL */}
       {showReleaseModal && (
         <div className="fixed inset-0 z-30 bg-stone-950/85 flex items-center justify-center p-4">
           <div className="bg-stone-900 border border-stone-700 rounded-2xl max-w-2xl w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="font-display text-2xl font-extrabold text-emerald-400">
-                  ROADMAP OPEN-SOURCE, PERFORMANCE & COMMUNITY
+                  OPENSTREETFOOTBALL · LICENZA MIT & COMMUNITY
                 </h2>
-                <p className="text-xs text-stone-400">
-                  Tutto pronto nel progetto per GitHub Pages, Itch.io, Licenza MIT e raccolta feedback.
-                </p>
               </div>
               <button
                 onClick={() => setShowReleaseModal(false)}
@@ -1455,77 +1802,27 @@ export default function App() {
             </div>
 
             <div className="space-y-3.5 text-xs">
-              {/* Phase 1 & 2 */}
               <div className="p-3.5 bg-stone-950 border border-stone-800 rounded-xl">
                 <div className="font-bold text-amber-400 mb-1">
-                  Fase 1 & 2 Completate: Build Relativa (`base: './'`), `LICENSE` MIT & `README.md`
+                  Build Relativa (`base: './'`), `LICENSE` MIT & `README.md`
                 </div>
                 <p className="text-stone-300 leading-relaxed">
-                  I file <code className="text-emerald-300">/LICENSE</code> (MIT) e{' '}
-                  <code className="text-emerald-300">/README.md</code> sono presenti nella radice del progetto, e{' '}
-                  <code className="text-emerald-300">vite.config.ts</code> usa già percorsi relativi per funzionare
-                  subito su <strong>GitHub Pages</strong>, nell’iframe ZIP di <strong>Itch.io</strong> (&ldquo;This file
-                  will be played in the browser&rdquo;) e in una WebView <strong>Android</strong>.
+                  Pronto per GitHub Pages, Itch.io e Android WebView, con architettura 100% procedurale e multiplayer
+                  LAN host-authoritative.
                 </p>
               </div>
 
-              {/* Phase 3: Live Hardware Benchmark */}
-              <div className="p-3.5 bg-stone-950 border border-stone-800 rounded-xl">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-bold text-sky-400">
-                    Fase 3: Telemetria GPU in Tempo Reale (Tasto F3)
-                  </span>
-                  <span className="font-mono-num text-emerald-400 font-bold">
-                    {telemetry.fps} FPS · {telemetry.frameTimeMs} ms · {telemetry.drawCalls} Draw Calls
-                  </span>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-stone-400">Testa subito il Render Scale:</span>
-                  {[0.5, 0.75, 1.0].map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => {
-                        setAutoRenderScale(false);
-                        setRenderScale(s);
-                      }}
-                      className={`px-2.5 py-1 rounded font-mono-num font-semibold cursor-pointer ${
-                        renderScale === s && !autoRenderScale
-                          ? 'bg-sky-400 text-stone-950'
-                          : 'bg-stone-800 text-stone-300'
-                      }`}
-                    >
-                      {Math.round(s * 100)}%
-                    </button>
-                  ))}
-                  <button
-                    onClick={() => setAutoRenderScale((prev) => !prev)}
-                    className={`px-2.5 py-1 rounded font-semibold cursor-pointer ${
-                      autoRenderScale ? 'bg-amber-500 text-stone-950' : 'bg-stone-800 text-stone-300'
-                    }`}
-                  >
-                    Auto-Adattamento GPU Deboli: {autoRenderScale ? 'ON' : 'OFF'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Phase 4: Ready-to-copy Community Feedback Pitches */}
               <div className="p-3.5 bg-stone-950 border border-stone-800 rounded-xl space-y-2.5">
-                <div className="font-bold text-emerald-400">
-                  Fase 4: Post Pronti per la Community (Clicca per Copiare)
-                </div>
-
+                <div className="font-bold text-emerald-400">Post Pronti per la Community</div>
                 <div className="flex items-center justify-between gap-3 bg-stone-900 p-2.5 rounded-lg border border-stone-800">
                   <div className="text-stone-300">
-                    <strong className="text-stone-100">Reddit IT (`r/IndieHackingItalia`, `r/GameDevelopersItaly`) & GameLoop.it</strong>
-                    <div className="text-[11px] text-stone-400 mt-0.5">
-                      Chiede feedback specifico sulla fisica del pallone di plastica, sulla doppia visuale FPS/TV e sulle performance su GPU integrate.
-                    </div>
+                    <strong className="text-stone-100">Post Presentazione IT</strong>
                   </div>
                   <button
                     onClick={() =>
                       copyCommunityPitch(
                         'it',
-                        `Ciao a tutti! Sto sviluppando "OpenStreetFootball", un gioco di calcio da strada 3D open-source (MIT) nel browser ispirato al calcio amatoriale tra ragazzini.\n\nPotete passare in tempo reale (Tasto C) dalla visuale classica da lontano alla Prima Persona (FPS), e cambiare la fisica del pallone (pallone di plastica leggerissimo che curva col vento, pallone bagnato pesante, pallone bucato dalla vecchia del cortile).\n\nCerco feedback specifici su:\n1) La traiettoria/rimbalzo del pallone di plastica vi sembra divertente o troppo imprevedibile?\n2) Come gira su portatili con GPU integrata usando il selettore Render Scale (50%/75%/100%)?`,
+                        `Ciao a tutti! Sto sviluppando "OpenStreetFootball", un gioco di calcio 3D open-source (MIT) in stile fumetto realistico, giocabile da 1v1 fino a 11 contro 11 con visuale TV o Prima Persona!`,
                       )
                     }
                     className="px-3 py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-100 rounded-lg font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
@@ -1534,40 +1831,19 @@ export default function App() {
                     <span>{copiedPitchId === 'it' ? 'Copiato!' : 'Copia Post IT'}</span>
                   </button>
                 </div>
-
-                <div className="flex items-center justify-between gap-3 bg-stone-900 p-2.5 rounded-lg border border-stone-800">
-                  <div className="text-stone-300">
-                    <strong className="text-stone-100">Reddit INT (`r/DestroyMyGame`, `r/IndieGaming`, `r/gamedev`)</strong>
-                    <div className="text-[11px] text-stone-400 mt-0.5">
-                      Post in inglese focalizzato sul passaggio istantaneo First-Person POV / Broadcast Camera e sulle gag fisiche.
-                    </div>
-                  </div>
-                  <button
-                    onClick={() =>
-                      copyCommunityPitch(
-                        'en',
-                        `I built "OpenStreetFootball", a zero-asset procedural 3D street football browser game (MIT Open Source) where you can switch mid-play between a classic Broadcast Camera and First-Person POV (C key).\n\nIt features real aerodynamic profiles for cheap plastic street balls (chaotic wobble + Magnus curve), heavy waterlogged balls, and courtyard hazards (shattering condo windows, a neighbor who punctures your ball).\n\nLooking for brutal feedback on:\n1) Does the First-Person POV feel readable when dribbling and charging shots?\n2) How does the frame rate hold up on low-end laptops?`,
-                      )
-                    }
-                    className="px-3 py-1.5 bg-stone-800 hover:bg-stone-700 text-stone-100 rounded-lg font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer"
-                  >
-                    {copiedPitchId === 'en' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedPitchId === 'en' ? 'Copiato!' : 'Copia Post EN'}</span>
-                  </button>
-                </div>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* 7. CONTROLS & CONTROLLER PRIORITY MODAL */}
+      {/* 7. MOUSE, KEYBOARD & ROLES COMPLETE GUIDE MODAL */}
       {showControlsModal && (
         <div className="fixed inset-0 z-30 bg-stone-950/85 flex items-center justify-center p-4">
-          <div className="bg-stone-900 border border-stone-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl">
+          <div className="bg-stone-900 border border-stone-700 rounded-2xl max-w-xl w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-display text-2xl font-extrabold text-amber-400">
-                PRIORITÀ TASTIERA, CONTROLLER ESTERNI & ANDROID
+                COMANDI MOUSE, TASTIERA, FALLI & CATEGORIE RUOLO
               </h2>
               <button
                 onClick={() => setShowControlsModal(false)}
@@ -1580,45 +1856,58 @@ export default function App() {
             <div className="space-y-3 text-xs text-stone-200">
               <div className="p-3 bg-stone-950 border border-stone-800 rounded-xl">
                 <div className="font-bold text-amber-400 mb-1.5">
-                  1. Giocatore 1 — Tastiera Prioritaria (PC / Browser)
+                  1. Movimento, Corsa, Salto & Urla
                 </div>
                 <div className="grid grid-cols-2 gap-1.5 text-stone-300">
-                  <div><strong className="text-stone-100">WASD</strong>: Movimento / Dribbling</div>
-                  <div><strong className="text-stone-100">Shift Sinistro</strong>: Scatto Veloce</div>
-                  <div><strong className="text-stone-100">Spazio / J</strong>: Tiro (Tieni premuto per caricare)</div>
-                  <div><strong className="text-stone-100">K / X</strong>: Passaggio Rasoterra / Cambia Uomo</div>
-                  <div><strong className="text-stone-100">L / Z</strong>: Scavetto / &ldquo;Cappello&rdquo;</div>
-                  <div><strong className="text-stone-100">E / F</strong>: Scivolata / Contrasto</div>
-                  <div><strong className="text-stone-100">C / V</strong>: Passa tra Prima Persona (FPS) e TV</div>
-                  <div><strong className="text-stone-100">B / F3</strong>: Cambia Pallone / Profiler FPS</div>
-                  <div className="col-span-2">
-                    <strong className="text-sky-300">Visuale FPS</strong>: Clicca sul campo per guardare col Mouse, oppure usa <strong className="text-stone-100">Q / R</strong> per ruotare lo sguardo.
-                  </div>
+                  <div><strong className="text-stone-100">WASD</strong>: Cammina / Muoviti</div>
+                  <div><strong className="text-stone-100">Shift</strong>: Corri / Scatta</div>
+                  <div><strong className="text-stone-100">Spazio</strong>: Salta / Colpo di Testa</div>
+                  <div><strong className="text-stone-100">Tasti 1, 2, 3, 4</strong>: Esclama / Urla in campo</div>
                 </div>
               </div>
 
               <div className="p-3 bg-stone-950 border border-stone-800 rounded-xl">
-                <div className="font-bold text-sky-400 mb-1">
-                  2. Giocatore 2 in Locale (Stessa Tastiera)
+                <div className="font-bold text-emerald-400 mb-1.5">
+                  2. Quando Mantieni la Palla (In Possesso)
                 </div>
-                <p className="text-stone-300">
-                  Attiva <strong>2P Locale</strong>: usa <strong className="text-stone-100">Frecce Direzionali</strong> per muoverti,{' '}
-                  <strong className="text-stone-100">Invio</strong> per tirare,{' '}
-                  <strong className="text-stone-100">Shift Destro</strong> per passare e{' '}
-                  <strong className="text-stone-100">M</strong> per il pallonetto!
-                </p>
+                <ul className="space-y-1 text-stone-300 list-disc pl-4">
+                  <li>
+                    <strong className="text-stone-100">Click Sinistro del Mouse (1 clic)</strong>: Passa o calcia rasoterra.
+                  </li>
+                  <li>
+                    <strong className="text-stone-100">Tieni Premuto il Tasto Sinistro del Mouse</strong>: Carica la potenza del tiro o passaggio; quando rilasci tiri più forte e <strong>direzione, angolazione e altezza variano in base a dove miri col Mouse mentre cammini</strong>!
+                  </li>
+                  <li>
+                    <strong className="text-stone-100">Click Destro del Mouse (1 clic)</strong>: Fai una finta rapida di corpo.
+                  </li>
+                  <li>
+                    <strong className="text-stone-100">Tieni Premuto il Tasto Destro del Mouse</strong>: Fai dribbling stretto continuo; più lo tieni premuto più dribbli, ma aumenta il rischio di farti recuperare palla dal difensore!
+                  </li>
+                </ul>
               </div>
 
               <div className="p-3 bg-stone-950 border border-stone-800 rounded-xl">
-                <div className="font-bold text-emerald-400 mb-1">
-                  3. Controller Esterni USB / Bluetooth (Xbox, PlayStation, Android Gamepad)
+                <div className="font-bold text-sky-400 mb-1.5">
+                  3. Quando NON Mantieni la Palla (Difesa & Portiere)
                 </div>
-                <p className="text-stone-300">
-                  Supporto plug-and-play nativo: <strong>Stick Sinistro</strong> muove, <strong>Stick Destro</strong>{' '}
-                  ruota lo sguardo in FPS, <strong>RT/R2</strong> scatta, <strong>A/Croce</strong> passa/cambia uomo,{' '}
-                  <strong>X/Quadrato</strong> tira, <strong>Y/Triangolo</strong> fa il cappello,{' '}
-                  <strong>Select/R3</strong> cambia telecamera FPS/TV.
-                </p>
+                <ul className="space-y-1 text-stone-300 list-disc pl-4">
+                  <li>
+                    <strong className="text-stone-100">Click Destro del Mouse</strong>: Scivolata normale ·{' '}
+                    <strong className="text-stone-100">Tieni Premuto il Tasto Destro</strong>: Scivolata più violenta e lunga!
+                  </li>
+                  <li>
+                    <strong className="text-amber-300">Tempismo Scivolata & Falli</strong>: La scivolata riesce solo se prendi il tempo e la mira per colpire il pallone e non il giocatore. Se colpisci l’avversario senza prendere la palla o entri da dietro, l’arbitro fischia <strong>Punizione con Barriera</strong> (o <strong>Calcio di Rigore</strong> in area!).
+                  </li>
+                  <li>
+                    <strong className="text-stone-100">Click Sinistro del Mouse (1 clic)</strong>: Richiama la marcatura di un compagno sul portatore di palla.
+                  </li>
+                  <li>
+                    <strong className="text-stone-100">Tieni Premuto il Tasto Sinistro del Mouse</strong>: Fai uscire il Portiere in automatico in direzione del possessore di palla!
+                  </li>
+                  <li>
+                    <strong className="text-rose-400">Regola Portiere Fuori Area</strong>: Se giochi in porta (ruolo Portiere) puoi parare con i tasti del mouse, ma se tocchi la palla con le mani fuori dall’area di rigore senza accorgertene è <strong>Rigore per l’avversario</strong>!
+                  </li>
+                </ul>
               </div>
             </div>
           </div>
